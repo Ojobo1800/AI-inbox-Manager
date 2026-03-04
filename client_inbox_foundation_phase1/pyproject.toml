@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "client-inbox-foundation-phase1"
+version = "0.1.0"
+description = "Phase 1 foundation for AI-powered inbox management"
+requires-python = ">=3.10"
+
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v"]

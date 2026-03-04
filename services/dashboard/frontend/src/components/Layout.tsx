@@ -1,0 +1,105 @@
+import { Outlet, NavLink } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
+import CountdownTimer from './CountdownTimer';
+
+const Layout = () => {
+  const { user, logout } = useAuth();
+
+  const navigation = [
+    { name: 'Dashboard', path: '/' },
+    { name: 'Interviews', path: '/interviews' },
+    { name: 'Review', path: '/review' },
+    { name: 'Settings', path: '/settings' },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-300">
+      {/* Navigation */}
+      <nav className="bg-white shadow-sm">
+        <div className="mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center">
+              {/* Colaberry logo — far left */}
+              <div className="flex-shrink-0 flex items-center mr-4">
+                <img
+                  src="/colaberry-logo.png"
+                  alt="Colaberry"
+                  className="h-8 w-auto"
+                />
+              </div>
+              {/* App name with email icon */}
+              <div className="flex-shrink-0 flex items-center">
+                {/* Email icon */}
+                <svg className="h-6 w-6 text-primary-600 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <h1 className="text-xl font-bold text-primary-600">
+                  AI-Inbox-Manager
+                </h1>
+                <CountdownTimer variant="nav" />
+              </div>
+              <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
+                {navigation.map((item) => (
+                  <NavLink
+                    key={item.name}
+                    to={item.path}
+                    end={item.path === '/'}
+                    className={({ isActive }) =>
+                      `inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium ${
+                        isActive
+                          ? 'border-primary-500 text-gray-900'
+                          : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                      }`
+                    }
+                  >
+                    {item.name}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center">
+              <span className="text-sm text-gray-700 mr-4">
+                {user?.username}
+              </span>
+              <button
+                onClick={logout}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Mobile menu */}
+        <div className="sm:hidden">
+          <div className="pt-2 pb-3 space-y-1">
+            {navigation.map((item) => (
+              <NavLink
+                key={item.name}
+                to={item.path}
+                end={item.path === '/'}
+                className={({ isActive }) =>
+                  `block pl-3 pr-4 py-2 border-l-4 text-base font-medium ${
+                    isActive
+                      ? 'bg-primary-50 border-primary-500 text-primary-700'
+                      : 'border-transparent text-gray-500 hover:bg-gray-50 hover:border-gray-300 hover:text-gray-700'
+                  }`
+                }
+              >
+                {item.name}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      </nav>
+
+      {/* Main content */}
+      <main className="mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <Outlet />
+      </main>
+    </div>
+  );
+};
+
+export default Layout;

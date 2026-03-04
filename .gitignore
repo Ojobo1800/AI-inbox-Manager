@@ -1,0 +1,77 @@
+# Temporary files - always safe to delete
+/tmp/
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Secrets - NEVER commit these
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+secrets.json
+config/prod.json
+config/production.json
+config/gmail_token.json
+config/gmail_credentials.json
+config/service-account-key.json
+config/staging.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+email_dashboard.db
+
+# Node modules
+node_modules/
+
+# Claude local settings
+.claude/
+
+# Logs
+*.log
+logs/

@@ -1,0 +1,20 @@
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.1
+
+# Code quality
+black>=23.7.0
+flake8>=6.1.0
+mypy>=1.5.0
+
+# Common utilities (add as needed)
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# AI/ML
+openai>=1.0.0
+
+# Google APIs (Sheets audit log)
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
