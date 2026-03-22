@@ -11,11 +11,18 @@ from typing import List, Dict, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-# Add execution directory to path
+# Add execution directory to path (local dev only)
 execution_path = Path(__file__).parent.parent.parent.parent.parent / "execution"
 sys.path.insert(0, str(execution_path))
 
-from fetch_emails import move_emails, delete_emails
+try:
+    from fetch_emails import move_emails, delete_emails
+    IMAP_AVAILABLE = True
+except ImportError:
+    IMAP_AVAILABLE = False
+    move_emails = None
+    delete_emails = None
+
 from config import settings
 from models import Email, EmailAction
 
@@ -52,6 +59,8 @@ def move_email(
 
     # Execute move via IMAP
     try:
+        if not IMAP_AVAILABLE:
+            raise Exception("IMAP actions not available in cloud deployment")
         moved_count = move_emails(
             server=settings.email_server,
             port=settings.email_port,
@@ -116,6 +125,8 @@ def delete_email(
 
     # Execute delete via IMAP
     try:
+        if not IMAP_AVAILABLE:
+            raise Exception("IMAP actions not available in cloud deployment")
         deleted_count = delete_emails(
             server=settings.email_server,
             port=settings.email_port,
@@ -228,6 +239,8 @@ def bulk_move_emails(
 
     # Execute moves via IMAP
     try:
+        if not IMAP_AVAILABLE:
+            raise Exception("IMAP actions not available in cloud deployment")
         moved_count = move_emails(
             server=settings.email_server,
             port=settings.email_port,
@@ -291,6 +304,8 @@ def bulk_delete_emails(
 
     # Execute deletes via IMAP
     try:
+        if not IMAP_AVAILABLE:
+            raise Exception("IMAP actions not available in cloud deployment")
         deleted_count = delete_emails(
             server=settings.email_server,
             port=settings.email_port,
