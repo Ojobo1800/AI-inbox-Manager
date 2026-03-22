@@ -370,8 +370,8 @@ def _backoff_wait(attempt: int, retry_after: Optional[float] = None) -> float:
 def call_claude_api(
     prompt: str,
     api_key: Optional[str] = None,
-    model: str = "gpt-4o",
-    max_tokens: int = 4096,
+    model: str = "gpt-4o-mini",
+    max_tokens: int = 800,
     temperature: float = 0.0,
     max_retries: int = 3,
 ) -> Dict[str, Any]:

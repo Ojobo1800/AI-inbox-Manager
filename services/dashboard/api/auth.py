@@ -52,7 +52,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 
-def create_session(username: str, db: Session) -> dict:
+def create_session(username: str, db: Session, role: str = "stakeholder") -> dict:
     """
     Create a new user session.
 
@@ -73,6 +73,7 @@ def create_session(username: str, db: Session) -> dict:
     session = UserSession(
         session_token=session_token,
         username=username,
+        role=role,
         created_at=datetime.utcnow(),
         expires_at=expires_at,
         last_activity=datetime.utcnow()

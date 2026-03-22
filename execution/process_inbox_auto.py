@@ -396,6 +396,7 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
             password=password,
             folder="INBOX",
             criteria="UNSEEN",  # CRITICAL: Only unread emails
+            limit=limit or _MAX_EMAILS_PER_RUN,  # Fetch only what we'll process
             mark_as_read=False  # Never mark interview requests as read
         )
 
@@ -501,7 +502,7 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                 return (idx, email_data, None, _zero_usage)
 
         classified: List[Tuple[int, Dict, Optional[Dict], Dict]] = []
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=16) as pool:
             futures = {
                 pool.submit(_classify_one, (idx, email_data)): idx
                 for idx, email_data in enumerate(emails, 1)

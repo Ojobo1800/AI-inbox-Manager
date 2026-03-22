@@ -4,6 +4,7 @@
 
 export interface User {
   username: string;
+  role: string;
   session_created: string;
   session_expires: string;
   last_activity: string;

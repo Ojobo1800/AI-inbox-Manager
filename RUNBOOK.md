@@ -135,4 +135,78 @@ The token auto-refreshes using the stored refresh token. Manual rotation is only
 
 ---
 
-*Last updated: 2026-02-28 | Maintained by: Colaberry InboxGenius team*
+---
+
+## Dashboard Logins
+
+| Role | Username | Password | Access |
+|------|----------|----------|--------|
+| Admin | `admin` | `admin123` | Full access |
+| Stakeholder | any (e.g. `stakeholder`) | `stakeholder123` | View-only |
+
+To change the stakeholder password:
+1. Generate a new hash: `python -c "import bcrypt; print(bcrypt.hashpw(b'newpassword', bcrypt.gensalt(12)).decode())"`
+2. Open `services/dashboard/api/.env`
+3. Replace the value of `STAKEHOLDER_PASSWORD_HASH`
+4. Restart the backend
+
+---
+
+## Processing Performance Settings
+
+Current settings (optimised 2026-03-22):
+
+| Setting | Value | File |
+|---------|-------|------|
+| GPT Model | `gpt-4o-mini` | `execution/classify_email.py` |
+| Max tokens | `800` | `execution/classify_email.py` |
+| Parallel workers | `16` | `execution/process_inbox_auto.py` |
+| Batch size (fetch limit) | `MAX_EMAILS_PER_RUN` env var (default 100) | `.env` |
+
+Expected run duration: **~30–60 seconds** per batch of 50 emails.
+
+### Clear Email Backlog Manually
+If unread emails pile up (e.g. after system downtime):
+```bash
+cd "C:\Users\lhc22\OneDrive\Desktop\AI_Ibox_Genuis_Manager\Colaberry_InboxGenius-main"
+python tmp/clear_backlog.py
+```
+Runs batches of 50 until inbox is empty. Press `Ctrl+C` to stop safely at any time.
+
+---
+
+## Git & GitHub
+
+**Repository:** https://github.com/Ojobo1800/AI-inbox-Manager
+
+### Commit and Push Changes
+Run from the project root:
+```bash
+cd "C:\Users\lhc22\OneDrive\Desktop\AI_Ibox_Genuis_Manager\Colaberry_InboxGenius-main"
+git add .
+git commit -m "your message here"
+git push
+```
+
+### Check What Has Changed (before committing)
+```bash
+git status
+git diff
+```
+
+### View Commit History
+```bash
+git log --oneline -10
+```
+
+### Files Never Committed (secrets — protected by .gitignore)
+- `config/gmail_token.json`
+- `config/gmail_credentials.json`
+- `config/service-account-key.json`
+- `.env`
+- `*.db` (database files)
+- `logs/` (log files)
+
+---
+
+*Last updated: 2026-03-22 | Maintained by: Colaberry InboxGenius team*

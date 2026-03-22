@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     session_secret: str = os.getenv("SESSION_SECRET", "")
     session_expiry_hours: int = int(os.getenv("SESSION_EXPIRY_HOURS", "24"))
     admin_password_hash: Optional[str] = os.getenv("ADMIN_PASSWORD_HASH")
+    stakeholder_password_hash: Optional[str] = os.getenv("STAKEHOLDER_PASSWORD_HASH")
 
     # CORS
     cors_origins: str = os.getenv(

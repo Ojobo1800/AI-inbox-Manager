@@ -58,8 +58,11 @@ const Layout = () => {
               </div>
             </div>
             <div className="flex items-center">
-              <span className="text-sm text-gray-700 mr-4">
+              <span className="text-sm text-gray-700 mr-2">
                 {user?.username}
+              </span>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full mr-4 ${user?.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                {user?.role === 'admin' ? 'Admin' : 'Stakeholder'}
               </span>
               <button
                 onClick={logout}

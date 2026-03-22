@@ -187,6 +187,7 @@ class UserSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     session_token = Column(String(255), unique=True, nullable=False, index=True)  # UUID
     username = Column(String(100), nullable=False)
+    role = Column(String(50), nullable=False, default="stakeholder")  # admin or stakeholder
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False, index=True)
     last_activity = Column(DateTime, default=datetime.utcnow)

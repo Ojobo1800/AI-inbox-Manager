@@ -129,8 +129,14 @@ async def login(
             detail="Authentication not configured. Set ADMIN_PASSWORD_HASH in .env"
         )
 
-    # Verify password
-    if not verify_password(request.password, settings.admin_password_hash):
+    # Determine role based on which password matches
+    role = None
+    if verify_password(request.password, settings.admin_password_hash):
+        role = "admin"
+    elif settings.stakeholder_password_hash and verify_password(request.password, settings.stakeholder_password_hash):
+        role = "stakeholder"
+
+    if role is None:
         logger.warning(f"Failed login attempt for user: {request.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -138,7 +144,7 @@ async def login(
         )
 
     # Create session
-    session_data = create_session(request.username, db)
+    session_data = create_session(request.username, db, role=role)
 
     # Set HTTP-only session cookie
     response.set_cookie(
@@ -203,6 +209,7 @@ async def get_current_user_info(user: UserSession = Depends(get_current_user)):
     """
     return {
         "username": user.username,
+        "role": getattr(user, "role", "stakeholder"),
         "session_created": user.created_at.isoformat(),
         "session_expires": user.expires_at.isoformat(),
         "last_activity": user.last_activity.isoformat()

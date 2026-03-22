@@ -440,7 +440,8 @@ const DashboardPage = () => {
             'Interview Cancelled':        '#6b7280',  // gray
           };
           const FALLBACK_COLORS = ['#a855f7','#14b8a6','#eab308','#64748b'];
-          const total = categoryData.reduce((sum, d) => sum + d.count, 0);
+          const filteredCategoryData = categoryData.filter(d => d.category !== 'Job Alert');
+          const total = filteredCategoryData.reduce((sum, d) => sum + d.count, 0);
           let fallbackIdx = 0;
           return (
             <div className="bg-white shadow rounded-lg overflow-hidden">
@@ -451,7 +452,7 @@ const DashboardPage = () => {
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
                   <Pie
-                    data={categoryData}
+                    data={filteredCategoryData}
                     dataKey="count"
                     nameKey="category"
                     cx="50%"
@@ -460,7 +461,7 @@ const DashboardPage = () => {
                     outerRadius={100}
                     paddingAngle={3}
                   >
-                    {categoryData.map((entry, index) => (
+                    {filteredCategoryData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={CATEGORY_COLORS[entry.category] ?? FALLBACK_COLORS[fallbackIdx++ % FALLBACK_COLORS.length]} />
                     ))}
                   </Pie>
