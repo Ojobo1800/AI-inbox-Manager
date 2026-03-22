@@ -67,8 +67,7 @@ def _run_migrations() -> None:
     Apply incremental schema changes that create_all() cannot handle.
     Only runs for SQLite (local dev). PostgreSQL (Render) gets full schema via create_all().
     """
-    db_url = str(settings.database_url)
-    if not db_url.startswith("sqlite"):
+    if not _db_url.startswith("sqlite"):
         return  # PostgreSQL — create_all() handles everything
 
     with engine.connect() as conn:
