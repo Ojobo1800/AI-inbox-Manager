@@ -750,12 +750,16 @@ def _log_process_run(stats: Dict[str, Any], summary_file) -> None:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        db_path = project_root / "services" / "dashboard" / "api" / "email_dashboard.db"
-        if not db_path.exists():
-            logger.warning("Dashboard database not found — skipping ProcessRun log")
-            return
+        # Use DATABASE_URL env var if set (cloud deployment), else fall back to local SQLite
+        dashboard_db_url = os.getenv("DATABASE_URL")
+        if not dashboard_db_url:
+            db_path = project_root / "services" / "dashboard" / "api" / "email_dashboard.db"
+            if not db_path.exists():
+                logger.warning("Dashboard database not found — skipping ProcessRun log")
+                return
+            dashboard_db_url = f"sqlite:///{db_path}"
 
-        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        engine = create_engine(dashboard_db_url, echo=False)
         Session = sessionmaker(bind=engine)
         db = Session()
 

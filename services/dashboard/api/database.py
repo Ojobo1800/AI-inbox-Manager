@@ -50,10 +50,13 @@ def get_db() -> Generator[Session, None, None]:
 
 def _run_migrations() -> None:
     """
-    Apply incremental schema changes that create_all() cannot handle
-    (i.e., new columns added to existing tables).
-    Safe to call every startup — each migration is idempotent.
+    Apply incremental schema changes that create_all() cannot handle.
+    Only runs for SQLite (local dev). PostgreSQL (Render) gets full schema via create_all().
     """
+    db_url = str(settings.database_url)
+    if not db_url.startswith("sqlite"):
+        return  # PostgreSQL — create_all() handles everything
+
     with engine.connect() as conn:
         # process_runs.gpt_cost_usd  (added 2026-02)
         result = conn.execute(text("PRAGMA table_info(process_runs)"))
