@@ -11,8 +11,17 @@ from typing import Generator
 
 from config import settings
 
-# Railway/Heroku provide postgres:// but SQLAlchemy requires postgresql://
-_db_url = settings.database_url or "sqlite:///./email_dashboard.db"
+import os
+
+# Railway may provide DATABASE_PUBLIC_URL or DATABASE_URL
+# Fall back to local SQLite if neither is set
+_db_url = (
+    os.getenv("DATABASE_URL") or
+    os.getenv("DATABASE_PUBLIC_URL") or
+    settings.database_url or
+    "sqlite:///./email_dashboard.db"
+)
+# Railway/Heroku use postgres:// but SQLAlchemy requires postgresql://
 if _db_url.startswith("postgres://"):
     _db_url = _db_url.replace("postgres://", "postgresql://", 1)
 
