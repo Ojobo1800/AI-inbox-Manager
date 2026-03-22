@@ -18,8 +18,7 @@ python-jose[cryptography]==3.3.0
 python-dotenv==1.0.0
 pydantic-settings==2.1.0
 
-# CORS & Security
-python-cors==1.0.0
+# CORS (handled by FastAPI built-in middleware)
 
 # SSE (Server-Sent Events)
 sse-starlette==1.8.2
