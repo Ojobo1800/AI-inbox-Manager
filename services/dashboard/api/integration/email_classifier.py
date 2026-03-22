@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 execution_path = Path(__file__).parent.parent.parent.parent.parent / "execution"
 sys.path.insert(0, str(execution_path))
 
-from classify_email import classify_email as classify_email_ai
+try:
+    from classify_email import classify_email as classify_email_ai
+    CLASSIFIER_AVAILABLE = True
+except ImportError:
+    classify_email_ai = None
+    CLASSIFIER_AVAILABLE = False
 from models import Email, Classification, Approval
 
 logger = logging.getLogger(__name__)

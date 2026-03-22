@@ -15,7 +15,14 @@ from sqlalchemy.orm import Session
 execution_path = Path(__file__).parent.parent.parent.parent.parent / "execution"
 sys.path.insert(0, str(execution_path))
 
-from fetch_emails import fetch_emails as fetch_emails_imap, EmailConnectionError, EmailFetchError
+try:
+    from fetch_emails import fetch_emails as fetch_emails_imap, EmailConnectionError, EmailFetchError
+    FETCHER_AVAILABLE = True
+except ImportError:
+    fetch_emails_imap = None
+    EmailConnectionError = Exception
+    EmailFetchError = Exception
+    FETCHER_AVAILABLE = False
 from config import settings
 from models import Email
 
