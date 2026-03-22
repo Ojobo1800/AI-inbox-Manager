@@ -66,8 +66,6 @@ class Settings(BaseSettings):
         if self.environment == "production":
             if not self.session_secret:
                 raise ValueError("SESSION_SECRET is required in production environment")
-            if not self.openai_api_key:
-                raise ValueError("OPENAI_API_KEY is required in production environment")
 
 
 settings = Settings()
