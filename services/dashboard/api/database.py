@@ -11,9 +11,14 @@ from typing import Generator
 
 from config import settings
 
+# Railway/Heroku provide postgres:// but SQLAlchemy requires postgresql://
+_db_url = settings.database_url or "sqlite:///./email_dashboard.db"
+if _db_url.startswith("postgres://"):
+    _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+
 # Create database engine
 engine = create_engine(
-    settings.database_url,
+    _db_url,
     pool_pre_ping=True,  # Verify connections before using
     echo=settings.debug  # Log SQL queries in debug mode
 )
