@@ -130,10 +130,13 @@ async def login(
         )
 
     # Determine role based on which password matches
+    # Strip whitespace in case env var was line-wrapped by hosting provider
+    admin_hash = settings.admin_password_hash.strip()
+    stakeholder_hash = settings.stakeholder_password_hash.strip() if settings.stakeholder_password_hash else None
     role = None
-    if verify_password(request.password, settings.admin_password_hash):
+    if verify_password(request.password, admin_hash):
         role = "admin"
-    elif settings.stakeholder_password_hash and verify_password(request.password, settings.stakeholder_password_hash):
+    elif stakeholder_hash and verify_password(request.password, stakeholder_hash):
         role = "stakeholder"
 
     if role is None:
