@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"
 
     def validate_production_settings(self):
         """Validate that required secrets are set in production."""
