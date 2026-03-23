@@ -154,8 +154,8 @@ async def login(
         key="session_token",
         value=session_data["session_token"],
         httponly=True,
-        secure=settings.environment == "production",  # HTTPS only in production
-        samesite="lax",
+        secure=True,
+        samesite="none",
         max_age=settings.session_expiry_hours * 3600
     )
 
