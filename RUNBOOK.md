@@ -286,7 +286,22 @@ When an Interview Request is detected, the system automatically sends an email n
 | Karthik Pairala | karthik@colaberry.com | Sarbjit, Ephrem, Terri, Yannick, Aisha, Mequanint, Kesetebirhan, Betty, Jeanne |
 | Vivek Burra | vivek@colaberry.com | Eyerusalem, Hemambika, Siddhatapa, Kwadjossan, Osarumwense, Senayit, Rutendo, Allan, Abdulheli |
 
-### Adding or Updating Students
+### Auto-Adding New Students
+If an interview request arrives for a student not in `config/students.py`, the system will:
+1. Extract the student's name from the email (via GPT or body parsing)
+2. Extract their email from forwarding headers or CC fields
+3. Auto-add them to `config/students.py` with **Karthik as default** assigned assistant
+4. Send the notification immediately
+
+The new student is saved permanently — future emails will find them automatically.
+
+To change their assigned assistant after auto-add, open `config/students.py` and update `assigned_to` and `assistant_email`:
+```python
+{"name": "New Student", "personal_email": "student@email.com", "phone": "",
+ "assigned_to": "Vivek", "assistant_email": "vivek@colaberry.com"}
+```
+
+### Adding or Updating Students Manually
 Edit `config/students.py` — each entry has:
 ```python
 {"name": "Full Name", "personal_email": "email@example.com", "phone": "1234567890",
@@ -295,13 +310,13 @@ Edit `config/students.py` — each entry has:
 No restart needed — file is read fresh on each processing run.
 
 ### Notification Failure Troubleshooting
-**Symptom:** Log shows `[NOTIFICATION SKIPPED: Student not found in Google Sheet]`
-- The student name extracted from the email doesn't match any name in `config/students.py`
-- Check the log for the extracted name hint and update the config if the name is spelled differently
+**Symptom:** Log shows `[NOTIFICATION SKIPPED: Student name could not be extracted from email]`
+- GPT could not extract a student name from the email body
+- Check the email manually and add the student to `config/students.py` if needed
 
 **Symptom:** Log shows `[NOTIFICATION FAILED: SMTP authentication failed]`
 - Gmail OAuth token may have expired — rotate using steps in **Credential Rotation** section above
 
 ---
 
-*Last updated: 2026-03-28 | Maintained by: Colaberry InboxGenius team*
+*Last updated: 2026-03-28 (auto-add students) | Maintained by: Colaberry InboxGenius team*
