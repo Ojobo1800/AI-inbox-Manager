@@ -597,6 +597,17 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                     except Exception as e:
                         logger.error(f"              [DB IMPORT FAILED: {e}]")
 
+                    # Send student notification email
+                    try:
+                        from notify_student import send_interview_notification
+                        notif = send_interview_notification(email_data, classification)
+                        if notif["success"]:
+                            logger.info(f"              [NOTIFICATION SENT → {notif['student_name']}]")
+                        else:
+                            logger.warning(f"              [NOTIFICATION SKIPPED: {notif.get('error')}]")
+                    except Exception as e:
+                        logger.error(f"              [NOTIFICATION FAILED: {e}]")
+
                 elif category == "Other":
                     # SPAM - Delete
                     stats["spam_deleted"] += 1
