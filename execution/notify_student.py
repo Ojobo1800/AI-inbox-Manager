@@ -33,11 +33,34 @@ FROM_EMAIL = os.getenv("EMAIL_ADDRESS", "c_interviews@colaberry.com")
 FROM_NAME = "Colaberry Interview Support"
 
 
+def _extract_student_email(email_data: Dict[str, Any]) -> str:
+    """Try to find the student's personal email from email headers or CC fields."""
+    import re
+    EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+    central = "c_interviews@colaberry.com"
+
+    # Check forwarding headers
+    headers = email_data.get("headers", {}) or {}
+    for key in ["Delivered-To", "X-Forwarded-To", "X-Original-To"]:
+        val = headers.get(key, "")
+        emails = EMAIL_RE.findall(val)
+        for e in emails:
+            if e.lower() != central:
+                return e
+
+    # Check To/CC addresses
+    for addr in (email_data.get("to_addresses", []) or []):
+        if addr.lower().strip() != central and "@" in addr:
+            return addr.strip()
+
+    return ""
+
+
 def _get_student_info(classification: Dict[str, Any], email_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Look up student from the Google Sheet using name from classification or email body.
+    Look up student by name. If not found, auto-add them using extracted email.
     """
-    from fetch_students_sheet import find_student_by_name
+    from fetch_students_sheet import find_student_by_name, add_new_student
 
     # Try name from GPT classification first
     extracted = classification.get("extracted_data", {}) or {}
@@ -62,6 +85,13 @@ def _get_student_info(classification: Dict[str, Any], email_data: Dict[str, Any]
         student = find_student_by_name(name_hint)
         if student:
             return student
+
+    # Student not found — auto-add if we have enough info
+    final_name = candidate_name or name_hint
+    if final_name:
+        student_email = _extract_student_email(email_data)
+        logger.info(f"New student detected: '{final_name}' — auto-adding to config")
+        return add_new_student(name=final_name, personal_email=student_email)
 
     logger.warning("Could not identify student for notification")
     return None
@@ -122,8 +152,8 @@ def send_interview_notification(
         # Step 1: Find student
         student = _get_student_info(classification, email_data)
         if not student:
-            result["error"] = "Student not found in Google Sheet"
-            logger.warning(f"Notification skipped — student not found. Email: {email_data.get('subject')}")
+            result["error"] = "Student name could not be extracted from email"
+            logger.warning(f"Notification skipped — no student name found. Email: {email_data.get('subject')}")
             return result
 
         result["student_name"] = student["name"]

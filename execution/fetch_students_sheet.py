@@ -103,3 +103,58 @@ def find_student_by_email(email: str) -> Optional[Dict[str, Any]]:
 
     logger.warning(f"No student found for email: {email}")
     return None
+
+
+def add_new_student(name: str, personal_email: str, phone: str = "") -> Dict[str, Any]:
+    """
+    Add a new student to config/students.py and return their record.
+
+    New students default to Karthik as assigned assistant.
+    An admin can manually update the assignment in config/students.py later.
+
+    Args:
+        name: Student full name
+        personal_email: Student's personal email address
+        phone: Student's phone number (optional)
+
+    Returns:
+        The new student dict
+    """
+    new_student = {
+        "name": name,
+        "personal_email": personal_email,
+        "phone": phone,
+        "assigned_to": "Karthik",
+        "assistant_email": "karthik@colaberry.com",
+        "cc_emails": CC_EMAILS,
+    }
+
+    # Append to in-memory list immediately
+    STUDENTS.append(new_student)
+
+    # Persist to config/students.py
+    config_path = Path(__file__).parent.parent / "config" / "students.py"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        new_entry = (
+            f'    {{"name": "{name}", "personal_email": "{personal_email}", '
+            f'"phone": "{phone}", "assigned_to": "Karthik", '
+            f'"assistant_email": "karthik@colaberry.com"}},\n'
+        )
+
+        # Insert before the closing bracket of STUDENTS list
+        content = content.replace(
+            "]\n\n# Always CC",
+            f"{new_entry}]\n\n# Always CC",
+        )
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        logger.info(f"New student added to config/students.py: {name} ({personal_email})")
+    except Exception as e:
+        logger.error(f"Failed to persist new student to config: {e}")
+
+    return new_student
