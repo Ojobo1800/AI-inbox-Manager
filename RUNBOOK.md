@@ -264,4 +264,44 @@ git log --oneline -10
 
 ---
 
-*Last updated: 2026-03-22 | Maintained by: Colaberry InboxGenius team*
+## Student Email Notifications
+
+When an Interview Request is detected, the system automatically sends an email notification to the student.
+
+### How It Works
+1. GPT classifies incoming email as **Interview Request** and extracts the student name + company
+2. System looks up the student in `config/students.py` by name
+3. Sends notification email to the student's personal email
+4. Email is signed by the student's assigned assistant (Karthik or Vivek)
+5. Shemika (`mika@colaberry.com`) and Jackie (`jackie@colaberry.com`) are always BCC'd
+
+### Email Sending
+- **Sent from:** `c_interviews@colaberry.com` (Option A — shared inbox)
+- **Signed as:** Karthik or Vivek depending on student assignment
+- **BCC:** Shemika + Jackie on every notification
+
+### Student Assignments
+| Assistant | Email | Students Assigned |
+|-----------|-------|------------------|
+| Karthik Pairala | karthik@colaberry.com | Sarbjit, Ephrem, Terri, Yannick, Aisha, Mequanint, Kesetebirhan, Betty, Jeanne |
+| Vivek Burra | vivek@colaberry.com | Eyerusalem, Hemambika, Siddhatapa, Kwadjossan, Osarumwense, Senayit, Rutendo, Allan, Abdulheli |
+
+### Adding or Updating Students
+Edit `config/students.py` — each entry has:
+```python
+{"name": "Full Name", "personal_email": "email@example.com", "phone": "1234567890",
+ "assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"}
+```
+No restart needed — file is read fresh on each processing run.
+
+### Notification Failure Troubleshooting
+**Symptom:** Log shows `[NOTIFICATION SKIPPED: Student not found in Google Sheet]`
+- The student name extracted from the email doesn't match any name in `config/students.py`
+- Check the log for the extracted name hint and update the config if the name is spelled differently
+
+**Symptom:** Log shows `[NOTIFICATION FAILED: SMTP authentication failed]`
+- Gmail OAuth token may have expired — rotate using steps in **Credential Rotation** section above
+
+---
+
+*Last updated: 2026-03-28 | Maintained by: Colaberry InboxGenius team*
