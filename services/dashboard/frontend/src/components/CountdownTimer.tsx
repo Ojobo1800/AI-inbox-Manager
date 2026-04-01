@@ -5,7 +5,7 @@ interface CountdownTimerProps {
 }
 
 const CountdownTimer = ({ variant = 'nav' }: CountdownTimerProps) => {
-  const { formatted, isRunning, intervalMinutes } = useCountdownTimer();
+  const { formatted, isRunning, isScheduled, intervalMinutes } = useCountdownTimer();
 
   if (variant === 'nav') {
     return (
@@ -14,6 +14,8 @@ const CountdownTimer = ({ variant = 'nav' }: CountdownTimerProps) => {
           <>
             Next run in: <span className="font-mono font-medium text-primary-600">{formatted}</span>
           </>
+        ) : isScheduled ? (
+          <span className="text-gray-400">Awaiting next run...</span>
         ) : (
           <span className="text-gray-400">No scheduled runs</span>
         )}
@@ -35,6 +37,10 @@ const CountdownTimer = ({ variant = 'nav' }: CountdownTimerProps) => {
               runs every {intervalMinutes} min
             </div>
           </>
+        ) : isScheduled ? (
+          <div className="text-lg text-gray-400">
+            Awaiting next run...
+          </div>
         ) : (
           <div className="text-lg text-gray-400">
             No scheduled runs

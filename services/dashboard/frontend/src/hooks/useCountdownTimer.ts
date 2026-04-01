@@ -35,17 +35,32 @@ export const useCountdownTimer = () => {
     const utcString = timestamp.endsWith('Z') || timestamp.includes('+') ? timestamp : timestamp + 'Z';
     const lastRun = new Date(utcString);
     const intervalMs = scheduleConfig.interval_minutes * 60 * 1000;
-    const nextRun = new Date(lastRun.getTime() + intervalMs);
+
+    // Calculate the next future run time, accounting for overdue schedules.
+    // If the last run was more than one interval ago, project forward by the
+    // number of full intervals elapsed so the countdown always shows a future time.
+    const computeNextRun = (): Date => {
+      const now = new Date();
+      const elapsed = now.getTime() - lastRun.getTime();
+      if (elapsed < intervalMs) {
+        // Still within the first interval — simple next run
+        return new Date(lastRun.getTime() + intervalMs);
+      }
+      // Overdue: find the next interval boundary ahead of now
+      const intervalsPassed = Math.floor(elapsed / intervalMs) + 1;
+      return new Date(lastRun.getTime() + intervalsPassed * intervalMs);
+    };
 
     const updateCountdown = () => {
       const now = new Date();
+      const nextRun = computeNextRun();
       const remaining = nextRun.getTime() - now.getTime();
 
       if (remaining <= 0) {
-        // Countdown reached zero - trigger refresh
+        // Still overdue after recompute — trigger a refresh and wait
         queryClient.invalidateQueries({ queryKey: ['summaryStats'] });
         queryClient.invalidateQueries({ queryKey: ['processingRuns'] });
-        setTimeRemaining(null);
+        setTimeRemaining(intervalMs); // show full interval while waiting for refresh
       } else {
         setTimeRemaining(remaining);
       }
@@ -60,6 +75,7 @@ export const useCountdownTimer = () => {
     timeRemaining,
     formatted: timeRemaining ? formatDuration(timeRemaining) : null,
     isRunning: timeRemaining !== null && timeRemaining > 0,
+    isScheduled: !!scheduleConfig?.interval_minutes,
     intervalMinutes: scheduleConfig?.interval_minutes,
   };
 };
