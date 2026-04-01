@@ -15,7 +15,7 @@ STUDENTS = [
     {"name": "Sarbjit Kaur",           "personal_email": "Sarbjitsaini83@yahoo.com",        "phone": "2093284394",  "assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
     {"name": "Ephrem Gebregziabher",   "personal_email": "eyohannes5@gmail.com",             "phone": "651-235-8973","assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
     {"name": "Terri Mark",             "personal_email": "terrlmark75@gmail.com",             "phone": "(936)-366-8606","assigned_to": "Karthik","assistant_email": "karthik@colaberry.com"},
-    {"name": "Yannick Patrick Ntwari", "personal_email": "Yannickнtwari8@gmail.com",         "phone": "207-329-5205","assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
+    {"name": "Yannick Patrick Ntwari", "personal_email": "Yannickntwari8@gmail.com",          "phone": "207-329-5205","assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
     {"name": "Aisha Hobbs",            "personal_email": "msajhobbs@gmail.com",               "phone": "972-896-0419","assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
     {"name": "Mequanint Kiflu",        "personal_email": "muhatmender@gmail.com",             "phone": "214-861-9744","assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
     {"name": "Kesetebirhan Yirdaw",    "personal_email": "kesetebirhan@gmail.com",            "phone": "15714782790","assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},

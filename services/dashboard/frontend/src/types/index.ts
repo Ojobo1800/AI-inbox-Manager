@@ -211,7 +211,6 @@ export interface NotificationSummary {
   recipient_email?: string;
   email_status: string;
   auto_send_eligible: boolean;
-  whatsapp_status?: string;
   missing_fields?: string[];
   created_at?: string;
   sub_type?: string;
@@ -231,10 +230,6 @@ export interface NotificationDetail {
   recipient_email?: string;
   email_status: string;
   auto_send_eligible: boolean;
-  whatsapp_message?: string;
-  whatsapp_recipient_phone?: string;
-  whatsapp_sender_phone?: string;
-  whatsapp_status?: string;
   missing_fields?: string[];
   reviewed_by?: string;
   reviewed_at?: string;
@@ -259,6 +254,24 @@ export interface NotificationDetail {
   student_phone?: string;
   email_db_id?: number;
   email_subject_original?: string;
+}
+
+export interface InterviewEventRecord {
+  event_id: number;
+  student_name?: string;
+  student_email?: string;
+  company_name?: string;
+  position_title?: string;
+  sub_type: string;
+  interview_type?: string;
+  interview_date?: string;
+  interview_time?: string;
+  interview_timezone?: string;
+  interview_format?: string;
+  notification_status?: string;
+  notified_at?: string;
+  recipient_email?: string;
+  created_at: string;
 }
 
 export interface StudentInfo {

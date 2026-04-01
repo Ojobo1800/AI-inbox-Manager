@@ -16,7 +16,6 @@ from execution.draft_notification import (
     format_interview_datetime,
     build_template_data,
     populate_template,
-    generate_whatsapp_message,
     draft_notification,
 )
 
@@ -262,72 +261,6 @@ class TestPopulateTemplate:
 
 
 # ============================================================================
-# WhatsApp Message Tests
-# ============================================================================
-
-
-class TestGenerateWhatsappMessage:
-    """Test WhatsApp summary message generation."""
-
-    def test_phone_screen_message(self):
-        msg = generate_whatsapp_message(SAMPLE_CLASSIFICATION, SAMPLE_STUDENT)
-
-        assert "John Doe" in msg
-        assert "phone screening" in msg
-        assert "TechCorp" in msg
-        assert "check your personal email" in msg
-
-    def test_cancelled_message(self):
-        classification = {
-            "interview_sub_type": "Interview Cancelled",
-            "company_name": "Acme Inc",
-        }
-        msg = generate_whatsapp_message(classification, SAMPLE_STUDENT)
-
-        assert "cancelled" in msg
-        assert "Acme Inc" in msg
-
-    def test_rescheduled_message(self):
-        classification = {
-            "interview_sub_type": "Interview Rescheduled",
-            "company_name": "DataCo",
-            "interview_date": "2026-04-01",
-            "interview_time": "10:00",
-        }
-        msg = generate_whatsapp_message(classification, SAMPLE_STUDENT)
-
-        assert "rescheduled" in msg
-        assert "DataCo" in msg
-        assert "2026-04-01" in msg
-
-    def test_interview_request_message(self):
-        classification = {
-            "interview_sub_type": "Interview Request",
-            "company_name": "StartupXYZ",
-            "position_title": "Engineer",
-        }
-        msg = generate_whatsapp_message(classification, SAMPLE_STUDENT)
-
-        assert "interview" in msg
-        assert "StartupXYZ" in msg
-        assert "Engineer" in msg
-
-    def test_missing_student_name(self):
-        classification = {
-            "interview_sub_type": "Phone Screen",
-            "company_name": "Test",
-        }
-        msg = generate_whatsapp_message(classification, {})
-
-        assert "Hi there!" in msg
-
-    def test_message_is_short(self):
-        """WhatsApp messages should be concise (under 300 chars)."""
-        msg = generate_whatsapp_message(SAMPLE_CLASSIFICATION, SAMPLE_STUDENT)
-        assert len(msg) < 300
-
-
-# ============================================================================
 # Full Draft Pipeline Tests
 # ============================================================================
 
@@ -345,8 +278,6 @@ class TestDraftNotification:
         assert result["bcc"] == "c_interviews@colaberry.com"
         assert result["draft_status"] == "ready"
         assert result["missing_fields"] == []
-        assert result["whatsapp_message"]
-        assert result["whatsapp_recipient_phone"] == "555-9999"
 
     def test_interview_request_draft(self):
         classification = {
@@ -458,13 +389,6 @@ class TestDraftNotification:
             assistant_name="CustomAssistant",
         )
         assert "CustomAssistant" in result["email_body"]
-
-    def test_whatsapp_fields_present(self):
-        result = draft_notification(SAMPLE_CLASSIFICATION, SAMPLE_STUDENT)
-
-        assert result["whatsapp_message"]
-        assert result["whatsapp_sender_name"]
-        assert result["whatsapp_sender_phone"]
 
     def test_no_personal_email(self):
         student = {**SAMPLE_STUDENT, "personal_email": None}

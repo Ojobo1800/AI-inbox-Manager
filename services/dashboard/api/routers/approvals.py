@@ -160,6 +160,8 @@ async def approve_classification(
                 detail=f"Invalid action: {request.action}"
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error executing action: {str(e)}")
 
@@ -270,6 +272,8 @@ async def override_classification(
                 detail=f"Invalid action: {request.action}"
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error executing action: {str(e)}")
 

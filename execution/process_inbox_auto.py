@@ -57,6 +57,8 @@ logging.basicConfig(
 from fetch_emails import fetch_emails, delete_emails, move_emails, EmailConnectionError, EmailFetchError
 from classify_email import classify_email
 
+# Add project root so execution.* package imports work (e.g. draft_notification → execution.email_templates)
+sys.path.insert(0, str(project_root))
 # Add services path for dashboard database access
 sys.path.insert(0, str(project_root / "services" / "dashboard" / "api"))
 
@@ -180,6 +182,10 @@ def process_interview_email(email_data: Dict[str, Any], email_db_id: int, classi
     """
     Process an interview email through the sub-classification pipeline.
 
+    Creates an InterviewEvent record, resolves the student from config,
+    upserts them into the students table, and creates a NotificationDraft
+    so the dashboard can track and display the notification lifecycle.
+
     Args:
         email_data: Email data from IMAP
         email_db_id: Database ID of the email
@@ -193,12 +199,11 @@ def process_interview_email(email_data: Dict[str, Any], email_db_id: int, classi
         return False
 
     try:
-        from log_interview import log_interview_event
+        from log_interview import log_interview_event, upsert_student, log_notification_draft
 
         _logger = logging.getLogger(__name__)
 
-        # Reuse the already-computed classification — no extra API call needed.
-        # Map classify_email extracted_data fields → InterviewEvent-ready dict.
+        # Map classify_email fields → InterviewEvent-ready dict
         _CATEGORY_TO_SUB_TYPE = {
             "Interview Request":         "interview_request",
             "Interview Schedule":        "interview_schedule",
@@ -225,40 +230,96 @@ def process_interview_email(email_data: Dict[str, Any], email_db_id: int, classi
         raw_fmt = (extracted.get("interview_type") or "").lower().strip()
         fmt     = _FORMAT_MAP.get(raw_fmt, raw_fmt or None)
 
-        location    = extracted.get("interview_location") or ""
+        location     = extracted.get("interview_location") or ""
         meeting_link = location if any(
             k in location.lower() for k in ["http", "zoom", "meet", "teams"]
         ) else None
 
         sub_classification = {
-            "interview_sub_type":   sub_type,
-            "company_name":         extracted.get("company_name"),
-            "position_title":       extracted.get("position_title"),
-            "contact_name":         extracted.get("contact_name"),
-            "contact_email":        extracted.get("contact_email"),
-            "contact_phone":        None,
-            "interview_date":       extracted.get("interview_date"),
-            "interview_time":       extracted.get("interview_time"),
-            "interview_timezone":   extracted.get("interview_timezone"),
-            "interview_format":     fmt,
+            "interview_sub_type":      sub_type,
+            "company_name":            extracted.get("company_name"),
+            "position_title":          extracted.get("position_title"),
+            "contact_name":            extracted.get("contact_name"),
+            "contact_email":           extracted.get("contact_email"),
+            "contact_phone":           None,
+            "interview_date":          extracted.get("interview_date"),
+            "interview_time":          extracted.get("interview_time"),
+            "interview_timezone":      extracted.get("interview_timezone"),
+            "interview_format":        fmt,
             "meeting_link_or_dial_in": meeting_link,
-            "num_interviewers":     None,
-            "is_job_machine":       False,
-            "is_next_round":        False,
-            "confidence":           float(classification.get("confidence", 0.0)),
+            "num_interviewers":        None,
+            "is_job_machine":          False,
+            "is_next_round":           False,
+            "confidence":              float(classification.get("confidence", 0.0)),
         }
 
+        # ── Resolve student from config/students.py ──────────────────────────
+        student_id = None
+        student_config = None
+        try:
+            from notify_student import _get_student_info, _build_student_info_for_draft, _build_classification_for_draft
+
+            student_config = _get_student_info(classification, email_data)
+            if student_config:
+                # Derive a stable username: "First Last" → "first.last"
+                username = student_config["name"].lower().replace(" ", ".")
+                student_db = upsert_student(
+                    db=db,
+                    username=username,
+                    full_name=student_config["name"],
+                    personal_email=student_config.get("personal_email"),
+                    phone_number=student_config.get("phone"),
+                )
+                student_id = student_db["id"]
+                _logger.info(
+                    f"Resolved student: {student_config['name']} (DB id={student_id})"
+                )
+        except Exception as e:
+            _logger.warning(f"Student resolution skipped: {e}")
+
+        # ── Create InterviewEvent ─────────────────────────────────────────────
         event_result = log_interview_event(
             db=db,
             email_db_id=email_db_id,
             classification=sub_classification,
-            student_id=None
+            student_id=student_id,
         )
 
         _logger.info(
             f"Created InterviewEvent {event_result['id']}: "
             f"{sub_type} at {extracted.get('company_name')}"
         )
+
+        # ── Create NotificationDraft for dashboard visibility ─────────────────
+        if student_id and student_config:
+            try:
+                from draft_notification import draft_notification
+                from notify_student import _build_student_info_for_draft, _build_classification_for_draft
+
+                student_info_for_draft = _build_student_info_for_draft(student_config)
+                draft_cls = _build_classification_for_draft(classification, email_data)
+                assistant_name = student_config.get("assigned_to")
+
+                draft = draft_notification(
+                    classification=draft_cls,
+                    student_info=student_info_for_draft,
+                    assistant_name=assistant_name,
+                )
+
+                auto_send = draft["draft_status"] == "ready"
+                log_notification_draft(
+                    db=db,
+                    interview_event_id=event_result["id"],
+                    draft=draft,
+                    auto_send_eligible=auto_send,
+                )
+                _logger.info(
+                    f"Created NotificationDraft for {student_config['name']} "
+                    f"(auto_send={auto_send}, status={draft['draft_status']})"
+                )
+            except Exception as e:
+                _logger.warning(f"NotificationDraft creation skipped: {e}")
+
         return True
 
     except Exception as e:
@@ -563,6 +624,7 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                 if is_genuine_interview_request(classification) or from_known_company:
                     # KEEP IN INBOX - Do not touch
                     stats["interview_requests"] += 1
+                    stats["categories"][category] = stats["categories"].get(category, 0) + 1
                     company = classification["extracted_data"].get("company_name")
 
                     interview_requests.append({
@@ -596,17 +658,6 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                                 logger.warning(f"              [INTERVIEW PROCESSING FAILED]")
                     except Exception as e:
                         logger.error(f"              [DB IMPORT FAILED: {e}]")
-
-                    # Send student notification email
-                    try:
-                        from notify_student import send_interview_notification
-                        notif = send_interview_notification(email_data, classification)
-                        if notif["success"]:
-                            logger.info(f"              [NOTIFICATION SENT → {notif['student_name']}]")
-                        else:
-                            logger.warning(f"              [NOTIFICATION SKIPPED: {notif.get('error')}]")
-                    except Exception as e:
-                        logger.error(f"              [NOTIFICATION FAILED: {e}]")
 
                 elif category == "Other":
                     # SPAM - Delete

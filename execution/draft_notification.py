@@ -1,14 +1,12 @@
 """
 Notification drafting execution script.
 
-Takes interview sub-classification results and student info to produce:
-1. A populated email notification (from the correct template)
-2. A short WhatsApp summary message
+Takes interview sub-classification results and student info to produce
+a populated email notification (from the correct template).
 
 Design principles:
 - Deterministic template population (no AI)
 - Detects and reports missing fields
-- Generates both email and WhatsApp drafts in one pass
 """
 
 import logging
@@ -28,24 +26,6 @@ logger = logging.getLogger(__name__)
 
 # Default assistant name (configurable via env)
 DEFAULT_ASSISTANT_NAME = os.getenv("STUDENT_ASSISTANT_NAME", "Robelyn")
-
-# WhatsApp sender config
-WHATSAPP_SENDERS = {
-    "Jackie": os.getenv("WHATSAPP_SENDER_JACKIE", "214-607-8702"),
-    "Ali": os.getenv("WHATSAPP_SENDER_ALI", "682-597-5784"),
-}
-DEFAULT_WHATSAPP_SENDER = os.getenv("WHATSAPP_DEFAULT_SENDER", "Jackie")
-
-# Human-readable sub-type labels for WhatsApp messages
-SUBTYPE_LABELS = {
-    "Interview Request": "interview",
-    "Phone Screen": "phone screening",
-    "Client Screen": "client interview",
-    "Technical Interview": "technical round",
-    "Interview Cancelled": "interview cancellation",
-    "Interview Rescheduled": "interview reschedule",
-    "Job Machine": "interview",
-}
 
 
 def format_interview_datetime(
@@ -183,59 +163,6 @@ def _safe_format(template_str: str, data: Dict[str, str]) -> str:
     return result
 
 
-def generate_whatsapp_message(
-    classification: Dict[str, Any],
-    student_info: Dict[str, Any],
-) -> str:
-    """
-    Generate a short WhatsApp summary message.
-
-    Args:
-        classification: Sub-classification result
-        student_info: Student info
-
-    Returns:
-        Short WhatsApp message text (2-3 sentences)
-    """
-    student_name = student_info.get("full_name") or "there"
-    sub_type = classification.get("interview_sub_type", "")
-    company = classification.get("company_name") or "a company"
-    position = classification.get("position_title") or ""
-    interview_date = classification.get("interview_date")
-    interview_time = classification.get("interview_time")
-
-    type_label = SUBTYPE_LABELS.get(sub_type, "interview update")
-
-    # Build the message based on sub-type
-    if sub_type == "Interview Cancelled":
-        return (
-            f"Hi {student_name}! Heads up - your interview with {company} "
-            f"has been cancelled. Please check your personal email for details "
-            f"and next steps."
-        )
-
-    if sub_type == "Interview Rescheduled":
-        datetime_str = format_interview_datetime(interview_date, interview_time)
-        return (
-            f"Hi {student_name}! Your interview with {company} has been "
-            f"rescheduled to {datetime_str}. "
-            f"Please check your personal email for full details."
-        )
-
-    # For all other types (requests, screens, technical)
-    position_part = f" for the {position} role" if position else ""
-    datetime_part = ""
-    if interview_date:
-        datetime_str = format_interview_datetime(interview_date, interview_time)
-        datetime_part = f" on {datetime_str}"
-
-    return (
-        f"Hi {student_name}! You have a {type_label} with {company}"
-        f"{position_part}{datetime_part}. "
-        f"Please check your personal email for full details and next steps."
-    )
-
-
 def draft_notification(
     classification: Dict[str, Any],
     student_info: Dict[str, Any],
@@ -261,10 +188,6 @@ def draft_notification(
             - bcc: BCC address
             - missing_fields: List of unfilled required fields
             - draft_status: "ready" | "needs_review" | "no_template"
-            - whatsapp_message: Short WhatsApp summary
-            - whatsapp_recipient_phone: Student's phone number
-            - whatsapp_sender_name: Sender name (Jackie/Ali)
-            - whatsapp_sender_phone: Sender phone number
     """
     sub_type = classification.get("interview_sub_type", "")
     is_job_machine = classification.get("is_job_machine", False)
@@ -297,7 +220,6 @@ def draft_notification(
 
     if not template:
         logger.warning(f"No template found for sub-type: {sub_type}")
-        whatsapp_msg = generate_whatsapp_message(classification, student_info)
         return {
             "template_id": None,
             "template_name": None,
@@ -307,12 +229,6 @@ def draft_notification(
             "bcc": "c_interviews@colaberry.com",
             "missing_fields": ["template"],
             "draft_status": "no_template",
-            "whatsapp_message": whatsapp_msg,
-            "whatsapp_recipient_phone": student_info.get("phone_number") or "",
-            "whatsapp_sender_name": DEFAULT_WHATSAPP_SENDER,
-            "whatsapp_sender_phone": WHATSAPP_SENDERS.get(
-                DEFAULT_WHATSAPP_SENDER, ""
-            ),
         }
 
     # Build data and populate template
@@ -325,13 +241,6 @@ def draft_notification(
     else:
         draft_status = "ready"
 
-    # Generate WhatsApp message
-    whatsapp_msg = generate_whatsapp_message(classification, student_info)
-
-    # Get WhatsApp sender info
-    sender_name = DEFAULT_WHATSAPP_SENDER
-    sender_phone = WHATSAPP_SENDERS.get(sender_name, "")
-
     return {
         "template_id": template.template_id,
         "template_name": template.template_name,
@@ -341,8 +250,4 @@ def draft_notification(
         "bcc": "c_interviews@colaberry.com",
         "missing_fields": populated["missing_fields"],
         "draft_status": draft_status,
-        "whatsapp_message": whatsapp_msg,
-        "whatsapp_recipient_phone": student_info.get("phone_number") or "",
-        "whatsapp_sender_name": sender_name,
-        "whatsapp_sender_phone": sender_phone,
     }

@@ -208,7 +208,7 @@ class Student(Base):
     full_name = Column(String(255))
     personal_email = Column(String(255))  # WHERE WE SEND NOTIFICATIONS
     assigned_gmail = Column(String(255))  # The c_interviews-linked Gmail
-    phone_number = Column(String(50))  # For WhatsApp reference
+    phone_number = Column(String(50))
     drive_folder_id = Column(String(255))
     last_synced_at = Column(DateTime)
     is_active = Column(Boolean, default=True, index=True)
@@ -279,12 +279,6 @@ class NotificationDraft(Base):
     recipient_email = Column(String(255))  # Student's PERSONAL email
     email_status = Column(String(50), default="draft", index=True)  # draft, approved, sent, failed, rejected
     auto_send_eligible = Column(Boolean, default=False)
-
-    # WhatsApp notification
-    whatsapp_message = Column(Text)
-    whatsapp_recipient_phone = Column(String(50))
-    whatsapp_sender_phone = Column(String(50))
-    whatsapp_status = Column(String(50), default="draft")  # draft, copied, sent
 
     # Review tracking
     missing_fields = Column(JSON)

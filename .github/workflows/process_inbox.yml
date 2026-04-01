@@ -1,0 +1,69 @@
+name: Process Inbox (Every 2 Hours)
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # Runs every 2 hours (UTC)
+  workflow_dispatch:          # Allow manual trigger from GitHub UI
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r execution/requirements.txt
+
+      - name: Write Gmail token
+        run: |
+          mkdir -p config
+          echo "${{ secrets.GMAIL_TOKEN_JSON }}" | base64 -d > config/gmail_token.json
+
+      - name: Write Gmail credentials
+        run: |
+          echo "${{ secrets.GMAIL_CREDENTIALS_JSON }}" | base64 -d > config/gmail_credentials.json
+
+      - name: Write Google service account key
+        run: |
+          echo "${{ secrets.SERVICE_ACCOUNT_KEY_JSON }}" | base64 -d > config/service-account-key.json
+
+      - name: Write .env file
+        run: |
+          cat > .env << 'ENVEOF'
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          ENVIRONMENT=production
+          LOG_LEVEL=INFO
+          EMAIL_SERVER=${{ secrets.EMAIL_SERVER }}
+          EMAIL_PORT=${{ secrets.EMAIL_PORT }}
+          EMAIL_ADDRESS=${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }}
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          SMTP_SERVER=smtp.gmail.com
+          SMTP_PORT=587
+          SMTP_USERNAME=${{ secrets.EMAIL_ADDRESS }}
+          SMTP_PASSWORD=${{ secrets.EMAIL_PASSWORD }}
+          SMTP_FROM_NAME=Colaberry Interview Support
+          ALERT_EMAIL_TO=${{ secrets.ALERT_EMAIL_TO }}
+          GOOGLE_SERVICE_ACCOUNT_KEY_PATH=config/service-account-key.json
+          GOOGLE_SHEET_ID=${{ secrets.GOOGLE_SHEET_ID }}
+          ENVEOF
+
+      - name: Run inbox processor
+        run: python execution/process_inbox_auto.py
+
+      - name: Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inbox-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 7

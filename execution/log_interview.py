@@ -202,10 +202,6 @@ def log_notification_draft(
         recipient_email=draft.get("recipient_email"),
         email_status="draft",
         auto_send_eligible=auto_send_eligible,
-        whatsapp_message=draft.get("whatsapp_message"),
-        whatsapp_recipient_phone=draft.get("whatsapp_recipient_phone"),
-        whatsapp_sender_phone=draft.get("whatsapp_sender_phone"),
-        whatsapp_status="draft",
         missing_fields=draft.get("missing_fields"),
     )
 
@@ -286,43 +282,3 @@ def update_notification_status(
     }
 
 
-def update_whatsapp_status(
-    db: Session,
-    notification_id: int,
-    whatsapp_status: str,
-) -> Dict[str, Any]:
-    """
-    Update the WhatsApp status of a notification draft.
-
-    Used for manual tracking of WhatsApp message sending.
-
-    Args:
-        db: SQLAlchemy database session
-        notification_id: Database ID of the NotificationDraft
-        whatsapp_status: New status (draft, copied, sent)
-
-    Returns:
-        Dictionary with updated notification fields
-    """
-    from models import NotificationDraft
-
-    notification = db.query(NotificationDraft).filter(
-        NotificationDraft.id == notification_id
-    ).first()
-
-    if not notification:
-        logger.error(f"Notification draft not found: {notification_id}")
-        return {"error": f"Notification {notification_id} not found"}
-
-    notification.whatsapp_status = whatsapp_status
-    db.commit()
-    db.refresh(notification)
-
-    logger.info(
-        f"Updated notification {notification_id} WhatsApp status to: {whatsapp_status}"
-    )
-
-    return {
-        "id": notification.id,
-        "whatsapp_status": notification.whatsapp_status,
-    }

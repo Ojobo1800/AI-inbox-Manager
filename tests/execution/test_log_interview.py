@@ -108,10 +108,6 @@ class NotificationDraft(TestBase):
     recipient_email = Column(String(255))
     email_status = Column(String(50), default="draft")
     auto_send_eligible = Column(Boolean, default=False)
-    whatsapp_message = Column(Text)
-    whatsapp_recipient_phone = Column(String(50))
-    whatsapp_sender_phone = Column(String(50))
-    whatsapp_status = Column(String(50), default="draft")
     missing_fields = Column(JSON)
     reviewed_by = Column(String(100))
     reviewed_at = Column(DateTime)
@@ -151,7 +147,6 @@ from execution.log_interview import (
     log_interview_event,
     log_notification_draft,
     update_notification_status,
-    update_whatsapp_status,
 )
 
 
@@ -226,9 +221,6 @@ def sample_draft():
         "bcc": "c_interviews@colaberry.com",
         "missing_fields": [],
         "draft_status": "ready",
-        "whatsapp_message": "Hi John! You have a phone screening with TechCorp.",
-        "whatsapp_recipient_phone": "555-9999",
-        "whatsapp_sender_phone": "214-607-8702",
     }
 
 
@@ -482,10 +474,6 @@ class TestLogNotificationDraft:
         assert draft.email_subject == "Phone Screen - TechCorp - Data Analyst"
         assert "phone screen" in draft.email_body.lower()
         assert draft.recipient_email == "john@personal.com"
-        assert draft.whatsapp_message is not None
-        assert draft.whatsapp_recipient_phone == "555-9999"
-        assert draft.whatsapp_sender_phone == "214-607-8702"
-        assert draft.whatsapp_status == "draft"
         assert draft.missing_fields == []
 
     def test_log_draft_with_missing_fields(
@@ -621,65 +609,3 @@ class TestUpdateNotificationStatus:
         assert "error" in result
 
 
-# ============================================================================
-# WhatsApp Status Update Tests
-# ============================================================================
-
-
-class TestUpdateWhatsappStatus:
-    """Test WhatsApp status updates."""
-
-    def _create_draft(
-        self, db_session, sample_email_id, sample_classification, sample_draft
-    ):
-        """Helper to create an event and draft."""
-        event = log_interview_event(
-            db_session,
-            email_db_id=sample_email_id,
-            classification=sample_classification,
-        )
-        draft_result = log_notification_draft(
-            db_session,
-            interview_event_id=event["id"],
-            draft=sample_draft,
-        )
-        return draft_result["id"]
-
-    def test_mark_as_copied(
-        self, db_session, sample_email_id, sample_classification, sample_draft
-    ):
-        draft_id = self._create_draft(
-            db_session, sample_email_id, sample_classification, sample_draft
-        )
-
-        result = update_whatsapp_status(
-            db_session,
-            notification_id=draft_id,
-            whatsapp_status="copied",
-        )
-
-        assert result["whatsapp_status"] == "copied"
-
-    def test_mark_as_sent(
-        self, db_session, sample_email_id, sample_classification, sample_draft
-    ):
-        draft_id = self._create_draft(
-            db_session, sample_email_id, sample_classification, sample_draft
-        )
-
-        result = update_whatsapp_status(
-            db_session,
-            notification_id=draft_id,
-            whatsapp_status="sent",
-        )
-
-        assert result["whatsapp_status"] == "sent"
-
-    def test_nonexistent_notification(self, db_session):
-        result = update_whatsapp_status(
-            db_session,
-            notification_id=9999,
-            whatsapp_status="sent",
-        )
-
-        assert "error" in result

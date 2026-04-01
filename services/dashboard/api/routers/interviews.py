@@ -6,14 +6,14 @@ Provides access to detected interview requests.
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, func
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, date
 
 from database import get_db
 from auth import get_current_user
-from models import Email, Classification, UserSession, InterviewEvent, Student
+from models import Email, Classification, UserSession, InterviewEvent, Student, NotificationDraft
 from checklist_steps import normalize_sub_type
 
 router = APIRouter()
@@ -39,6 +39,27 @@ class InterviewRequest(BaseModel):
     interview_time: Optional[str] = None
     contact_name: Optional[str] = None
     interview_event_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class InterviewEventRecord(BaseModel):
+    event_id: int
+    student_name: Optional[str]
+    student_email: Optional[str]
+    company_name: Optional[str]
+    position_title: Optional[str]
+    sub_type: str
+    interview_type: Optional[str]
+    interview_date: Optional[str]
+    interview_time: Optional[str]
+    interview_timezone: Optional[str]
+    interview_format: Optional[str]
+    notification_status: Optional[str]
+    notified_at: Optional[datetime]
+    recipient_email: Optional[str]
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -180,6 +201,66 @@ async def get_interview_count(
     ).count()
 
     return {"count": count}
+
+
+@router.get("/events", response_model=List[InterviewEventRecord])
+async def get_interview_events(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """
+    Get all interview events with student info and notification status.
+
+    Returns every row in interview_events joined with the student record
+    and the latest notification draft for that event (if any).
+    Ordered newest first.
+    """
+    # Subquery: latest notification draft ID per interview event
+    latest_notif_subq = (
+        db.query(
+            NotificationDraft.interview_event_id,
+            func.max(NotificationDraft.id).label("latest_id")
+        )
+        .group_by(NotificationDraft.interview_event_id)
+        .subquery()
+    )
+
+    results = (
+        db.query(InterviewEvent, Student, NotificationDraft)
+        .outerjoin(Student, InterviewEvent.student_id == Student.id)
+        .outerjoin(
+            latest_notif_subq,
+            InterviewEvent.id == latest_notif_subq.c.interview_event_id
+        )
+        .outerjoin(
+            NotificationDraft,
+            NotificationDraft.id == latest_notif_subq.c.latest_id
+        )
+        .order_by(desc(InterviewEvent.created_at))
+        .all()
+    )
+
+    records = []
+    for event, student, notif in results:
+        records.append(InterviewEventRecord(
+            event_id=event.id,
+            student_name=student.full_name if student else "Unknown",
+            student_email=student.personal_email if student else None,
+            company_name=event.company_name,
+            position_title=event.position_title,
+            sub_type=event.sub_type,
+            interview_type=normalize_sub_type(event.sub_type),
+            interview_date=event.interview_date,
+            interview_time=event.interview_time,
+            interview_timezone=event.interview_timezone,
+            interview_format=event.interview_format,
+            notification_status=notif.email_status if notif else None,
+            notified_at=notif.sent_at if notif else None,
+            recipient_email=notif.recipient_email if notif else None,
+            created_at=event.created_at,
+        ))
+
+    return records
 
 
 @router.get("/{email_id}")

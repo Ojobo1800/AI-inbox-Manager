@@ -11,17 +11,22 @@ Design principles:
 - Deterministic matching logic (no AI)
 """
 
+import importlib.util
 import logging
 import re
-import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
-# Load students from config
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from config.students import STUDENTS, CC_EMAILS
+# Load students directly from config/students.py by file path to avoid
+# sys.path collisions with same-named modules in other service directories.
+_students_path = Path(__file__).parent.parent / "config" / "students.py"
+_spec = importlib.util.spec_from_file_location("_students_config", _students_path)
+_students_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_students_mod)
+STUDENTS = _students_mod.STUDENTS
+CC_EMAILS = _students_mod.CC_EMAILS
 
 
 def get_all_students(force_refresh: bool = False) -> List[Dict[str, Any]]:

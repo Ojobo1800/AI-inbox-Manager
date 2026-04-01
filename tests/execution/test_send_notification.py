@@ -198,6 +198,8 @@ class TestSendEmail:
         assert result["status"] == "validation_error"
         assert result["error"] is not None
 
+    @patch("execution.send_notification.SMTP_USERNAME", "")
+    @patch("execution.send_notification.SMTP_PASSWORD", "")
     def test_missing_smtp_credentials(self):
         """Test that missing SMTP credentials are caught."""
         result = send_email(

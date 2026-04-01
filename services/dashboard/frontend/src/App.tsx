@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage';
 // Lazy load page components for better initial load performance
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const InterviewsPage = lazy(() => import('./pages/InterviewsPage'));
+const InterviewEventsReportPage = lazy(() => import('./pages/InterviewEventsReportPage'));
 const ReviewPage = lazy(() => import('./pages/ReviewPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
@@ -63,6 +64,11 @@ const AppRoutes = () => {
         <Route path="interviews" element={
           <Suspense fallback={<PageLoader />}>
             <InterviewsPage />
+          </Suspense>
+        } />
+        <Route path="interview-events" element={
+          <Suspense fallback={<PageLoader />}>
+            <InterviewEventsReportPage />
           </Suspense>
         } />
         <Route path="review" element={

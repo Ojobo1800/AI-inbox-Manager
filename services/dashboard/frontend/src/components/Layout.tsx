@@ -8,6 +8,7 @@ const Layout = () => {
   const navigation = [
     { name: 'Dashboard', path: '/' },
     { name: 'Interviews', path: '/interviews' },
+    { name: 'Events Report', path: '/interview-events' },
     { name: 'Review', path: '/review' },
     { name: 'Settings', path: '/settings' },
   ];

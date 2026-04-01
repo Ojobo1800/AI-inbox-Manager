@@ -226,6 +226,11 @@ class ApiClient {
     return response.data;
   }
 
+  async getInterviewEvents(): Promise<import('../types').InterviewEventRecord[]> {
+    const response = await this.client.get('/api/interviews/events');
+    return response.data;
+  }
+
   // Whitelist
   async getWhitelist(): Promise<WhitelistCompany[]> {
     const response = await this.client.get('/api/whitelist');
@@ -294,13 +299,6 @@ class ApiClient {
   async rejectNotification(notificationId: number, reason?: string): Promise<any> {
     const response = await this.client.post(`/api/notifications/${notificationId}/reject`, {
       reason,
-    });
-    return response.data;
-  }
-
-  async updateWhatsAppStatus(notificationId: number, status: string): Promise<any> {
-    const response = await this.client.post(`/api/notifications/${notificationId}/whatsapp-status`, {
-      whatsapp_status: status,
     });
     return response.data;
   }

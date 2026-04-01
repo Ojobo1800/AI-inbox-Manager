@@ -31,11 +31,6 @@ class Settings(BaseSettings):
     sqlserver_password: str = ""
     sqlserver_driver: str = "ODBC Driver 18 for SQL Server"
 
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_whatsapp_from: str = ""
-    twilio_whatsapp_to: str = ""
-
     n8n_base_url: str = "http://localhost:5678"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

@@ -2,11 +2,11 @@
 Student information retrieval execution script.
 
 Orchestrates student data retrieval by combining student resolution
-(from email headers) with Google Drive data lookup. Returns structured
+(from email headers) with config/students.py lookup. Returns structured
 student information needed for notification drafting.
 
 Design principles:
-- Orchestrates resolve_student.py and google_drive_client.py
+- Orchestrates resolve_student.py and config/students.py
 - Returns a standardized student info dictionary
 - Handles missing data gracefully
 - No AI — purely deterministic
@@ -16,7 +16,6 @@ import logging
 from typing import Dict, Any, Optional
 
 from execution.resolve_student import resolve_student
-from execution.google_drive_client import GoogleDriveClient
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -91,15 +90,14 @@ def normalize_student_data(raw_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def fetch_student_info(
     email_data: Dict[str, Any],
-    drive_client: Optional[GoogleDriveClient] = None,
 ) -> Dict[str, Any]:
     """
     Fetch student information for an interview email.
 
     Steps:
     1. Resolve which student the email is about (via headers)
-    2. Look up student data from Google Drive
-    3. Return standardized student info
+    2. Return standardized student info (contact details come from config/students.py
+       in the live pipeline via notify_student.py)
 
     Args:
         email_data: Dictionary with email data including:
@@ -107,8 +105,6 @@ def fetch_student_info(
             - to_addresses: List of To/CC addresses
             - body_content: Email body text
             - sender_email: Sender's email
-        drive_client: Optional pre-configured GoogleDriveClient.
-            A new one is created if not provided.
 
     Returns:
         Dictionary with:
@@ -118,7 +114,6 @@ def fetch_student_info(
             - full_name: str | None
             - personal_email: str | None (WHERE TO SEND NOTIFICATIONS)
             - phone_number: str | None
-            - drive_data: dict | None (full Drive spreadsheet data)
             - status: "resolved" | "partial" | "not_found"
             - error: str | None
     """
@@ -130,7 +125,6 @@ def fetch_student_info(
         "personal_email": None,
         "assigned_gmail": None,
         "phone_number": None,
-        "drive_data": None,
         "status": "not_found",
         "error": None,
     }
@@ -149,46 +143,15 @@ def fetch_student_info(
     # If we couldn't identify the student, return early
     if not result["student_username"]:
         result["error"] = "Could not identify student from email"
-        # If we found a name hint, include it
         if resolution.get("student_name_hint"):
             result["full_name"] = resolution["student_name_hint"]
             result["status"] = "partial"
         return result
 
-    # Step 2: Look up student data from Google Drive
-    try:
-        if drive_client is None:
-            drive_client = GoogleDriveClient()
-
-        raw_data = drive_client.get_student_info(result["student_username"])
-
-        if raw_data:
-            normalized = normalize_student_data(raw_data)
-            result["drive_data"] = normalized
-            result["full_name"] = normalized.get("full_name")
-            result["personal_email"] = normalized.get("personal_email")
-            result["assigned_gmail"] = (
-                normalized.get("assigned_gmail") or result["student_gmail"]
-            )
-            result["phone_number"] = normalized.get("phone_number")
-            result["status"] = "resolved"
-            logger.info(
-                f"Student info resolved: {result['full_name']} "
-                f"(personal email: {result['personal_email']})"
-            )
-        else:
-            result["assigned_gmail"] = result["student_gmail"]
-            result["status"] = "partial"
-            result["error"] = (
-                f"Student folder/spreadsheet not found in Drive "
-                f"for username: {result['student_username']}"
-            )
-            logger.warning(result["error"])
-
-    except Exception as e:
-        logger.error(f"Google Drive lookup failed: {e}")
-        result["assigned_gmail"] = result["student_gmail"]
-        result["status"] = "partial"
-        result["error"] = f"Drive lookup failed: {str(e)}"
+    # Student gmail resolved — contact details are looked up at runtime
+    # via notify_student.py → config/students.py in the live pipeline.
+    result["assigned_gmail"] = result["student_gmail"]
+    result["status"] = "partial"
+    logger.info(f"Student username resolved: {result['student_username']}")
 
     return result

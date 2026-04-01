@@ -22,14 +22,6 @@ const EMAIL_STATUS_STYLES: Record<string, { bg: string; text: string }> = {
   rejected: { bg: 'bg-red-100', text: 'text-red-800' },
 };
 
-const WHATSAPP_STATUS_OPTIONS = ['draft', 'copied', 'sent'] as const;
-
-const WHATSAPP_STATUS_STYLES: Record<string, { bg: string; text: string }> = {
-  draft: { bg: 'bg-gray-100', text: 'text-gray-700' },
-  copied: { bg: 'bg-yellow-100', text: 'text-yellow-800' },
-  sent: { bg: 'bg-green-100', text: 'text-green-800' },
-};
-
 /**
  * Inline panel shown below an expanded interview email.
  * Displays interview details, notification draft, and WhatsApp message.
@@ -42,7 +34,6 @@ const InterviewDetailPanel = ({ emailId }: { emailId: number }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
-  const [copySuccess, setCopySuccess] = useState(false);
 
   const { data: notification, isLoading, error } = useQuery({
     queryKey: ['notificationByEmail', emailId],
@@ -79,14 +70,6 @@ const InterviewDetailPanel = ({ emailId }: { emailId: number }) => {
     },
   });
 
-  const whatsappMutation = useMutation({
-    mutationFn: (params: { id: number; status: string }) =>
-      apiClient.updateWhatsAppStatus(params.id, params.status),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notificationByEmail', emailId] });
-    },
-  });
-
   const startEditing = (n: NotificationDetail) => {
     setEditSubject(n.email_subject || '');
     setEditBody(n.email_body || '');
@@ -103,26 +86,6 @@ const InterviewDetailPanel = ({ emailId }: { emailId: number }) => {
       recipient: editRecipient,
       sendAfterEdit,
     });
-  };
-
-  const handleCopyWhatsApp = async (message: string) => {
-    try {
-      await navigator.clipboard.writeText(message);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-      if (notification && notification.whatsapp_status === 'draft') {
-        whatsappMutation.mutate({ id: notification.id, status: 'copied' });
-      }
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = message;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    }
   };
 
   if (isLoading) {
@@ -414,55 +377,6 @@ const InterviewDetailPanel = ({ emailId }: { emailId: number }) => {
         )}
       </div>
 
-      {/* WhatsApp Message */}
-      {notification.whatsapp_message && (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-semibold text-gray-900">WhatsApp Message</h4>
-            <div className="flex items-center space-x-2">
-              {WHATSAPP_STATUS_OPTIONS.map((status) => {
-                const style = WHATSAPP_STATUS_STYLES[status];
-                const isActive = notification.whatsapp_status === status;
-                return (
-                  <button
-                    key={status}
-                    onClick={() => whatsappMutation.mutate({ id: notification.id, status })}
-                    disabled={whatsappMutation.isPending}
-                    className={`px-2 py-0.5 rounded text-xs font-medium capitalize transition-colors ${
-                      isActive
-                        ? `${style.bg} ${style.text} ring-1 ring-offset-1 ring-gray-300`
-                        : 'bg-white text-gray-400 border border-gray-200 hover:bg-gray-50'
-                    }`}
-                  >
-                    {status}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                {notification.whatsapp_recipient_phone && (
-                  <div className="text-xs text-gray-500 mb-1">
-                    To: {notification.whatsapp_recipient_phone}
-                    {notification.whatsapp_sender_phone && (
-                      <span className="ml-2">From: {notification.whatsapp_sender_phone}</span>
-                    )}
-                  </div>
-                )}
-                <p className="text-sm text-gray-800 whitespace-pre-wrap">{notification.whatsapp_message}</p>
-              </div>
-              <button
-                onClick={() => handleCopyWhatsApp(notification.whatsapp_message!)}
-                className="ml-3 flex-shrink-0 px-3 py-1.5 bg-green-50 text-green-700 rounded-md text-sm font-medium hover:bg-green-100 border border-green-200"
-              >
-                {copySuccess ? 'Copied!' : 'Copy'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

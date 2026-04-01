@@ -2,7 +2,7 @@
 Notification management API endpoints.
 
 Provides endpoints for viewing, approving, rejecting, and sending
-interview notification drafts, as well as WhatsApp status tracking.
+interview notification drafts.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -40,7 +40,6 @@ class NotificationSummary(BaseModel):
     recipient_email: Optional[str]
     email_status: str
     auto_send_eligible: bool
-    whatsapp_status: Optional[str]
     missing_fields: Optional[list]
     created_at: Optional[datetime]
 
@@ -71,12 +70,6 @@ class NotificationDetail(BaseModel):
     recipient_email: Optional[str]
     email_status: str
     auto_send_eligible: bool
-
-    # WhatsApp notification
-    whatsapp_message: Optional[str]
-    whatsapp_recipient_phone: Optional[str]
-    whatsapp_sender_phone: Optional[str]
-    whatsapp_status: Optional[str]
 
     # Review tracking
     missing_fields: Optional[list]
@@ -129,12 +122,6 @@ class RejectRequest(BaseModel):
     reason: Optional[str] = None
 
 
-class WhatsAppStatusRequest(BaseModel):
-    """Request to update WhatsApp manual status."""
-
-    whatsapp_status: str  # draft, copied, sent
-
-
 class StudentResponse(BaseModel):
     """Student info response."""
 
@@ -171,7 +158,6 @@ def _build_notification_summary(
         "recipient_email": draft.recipient_email,
         "email_status": draft.email_status,
         "auto_send_eligible": draft.auto_send_eligible,
-        "whatsapp_status": draft.whatsapp_status,
         "missing_fields": draft.missing_fields,
         "created_at": draft.created_at,
     }
@@ -202,10 +188,6 @@ def _build_notification_detail(
         "recipient_email": draft.recipient_email,
         "email_status": draft.email_status,
         "auto_send_eligible": draft.auto_send_eligible,
-        "whatsapp_message": draft.whatsapp_message,
-        "whatsapp_recipient_phone": draft.whatsapp_recipient_phone,
-        "whatsapp_sender_phone": draft.whatsapp_sender_phone,
-        "whatsapp_status": draft.whatsapp_status,
         "missing_fields": draft.missing_fields,
         "reviewed_by": draft.reviewed_by,
         "reviewed_at": draft.reviewed_at,
@@ -473,41 +455,6 @@ async def reject_notification(
         "id": draft.id,
         "email_status": draft.email_status,
         "reviewed_by": draft.reviewed_by,
-    }
-
-
-@router.post("/{notification_id}/whatsapp-status")
-async def update_whatsapp_status(
-    notification_id: int,
-    request: WhatsAppStatusRequest,
-    db: Session = Depends(get_db),
-    user: UserSession = Depends(get_current_user),
-):
-    """Update WhatsApp manual sending status."""
-    draft = (
-        db.query(NotificationDraft)
-        .filter(NotificationDraft.id == notification_id)
-        .first()
-    )
-
-    if not draft:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification {notification_id} not found",
-        )
-
-    if request.whatsapp_status not in ("draft", "copied", "sent"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid WhatsApp status. Must be: draft, copied, or sent",
-        )
-
-    draft.whatsapp_status = request.whatsapp_status
-    db.commit()
-
-    return {
-        "id": draft.id,
-        "whatsapp_status": draft.whatsapp_status,
     }
 
 
