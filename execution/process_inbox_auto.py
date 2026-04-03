@@ -75,8 +75,11 @@ def get_db_session():
             from sqlalchemy import create_engine
             from sqlalchemy.orm import sessionmaker
 
-            db_path = project_root / "services" / "dashboard" / "api" / "email_dashboard.db"
-            _db_engine = create_engine(f"sqlite:///{db_path}", echo=False)
+            db_url = os.getenv("DATABASE_URL")
+            if not db_url:
+                db_path = project_root / "services" / "dashboard" / "api" / "email_dashboard.db"
+                db_url = f"sqlite:///{db_path}"
+            _db_engine = create_engine(db_url, echo=False)
             SessionLocal = sessionmaker(bind=_db_engine)
             _db_session = SessionLocal()
         except Exception as e:
