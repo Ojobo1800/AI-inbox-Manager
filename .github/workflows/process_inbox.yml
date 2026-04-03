@@ -52,6 +52,12 @@ jobs:
           GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}
           ENVEOF
 
+      - name: Write Gmail credentials
+        run: |
+          mkdir -p config
+          echo "${{ secrets.GMAIL_TOKEN_JSON }}" | base64 -d > config/gmail_token.json
+          echo "${{ secrets.GMAIL_CREDENTIALS_JSON }}" | base64 -d > config/gmail_credentials.json
+
       - name: Write Google service account key
         run: |
           mkdir -p config
