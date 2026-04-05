@@ -4,7 +4,6 @@ import { format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  FunnelChart, Funnel, LabelList, Cell,
 } from 'recharts';
 import { apiClient } from '../api/client';
 
