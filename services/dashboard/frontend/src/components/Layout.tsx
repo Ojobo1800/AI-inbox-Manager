@@ -9,6 +9,7 @@ const Layout = () => {
     { name: 'Dashboard', path: '/' },
     { name: 'Interviews', path: '/interviews' },
     { name: 'Events Report', path: '/interview-events' },
+    { name: 'Reports', path: '/reports' },
     { name: 'Review', path: '/review' },
     { name: 'Settings', path: '/settings' },
   ];

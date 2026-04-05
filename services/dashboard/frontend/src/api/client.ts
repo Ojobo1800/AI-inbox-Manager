@@ -348,6 +348,32 @@ class ApiClient {
     return response.data;
   }
 
+  // Reports
+  async getStudentActivity(): Promise<any[]> {
+    const response = await this.client.get('/api/stats/student-activity');
+    return response.data;
+  }
+
+  async getCompanyTracker(): Promise<any[]> {
+    const response = await this.client.get('/api/stats/company-tracker');
+    return response.data;
+  }
+
+  async getMissedInterviews(): Promise<any[]> {
+    const response = await this.client.get('/api/stats/missed-interviews');
+    return response.data;
+  }
+
+  async getWeeklySummary(): Promise<any> {
+    const response = await this.client.get('/api/stats/weekly-summary');
+    return response.data;
+  }
+
+  async getInterviewPipeline(): Promise<any> {
+    const response = await this.client.get('/api/stats/pipeline');
+    return response.data;
+  }
+
   // Health Check
   async healthCheck(): Promise<{ status: string; environment: string; database: string }> {
     const response = await this.client.get('/health');

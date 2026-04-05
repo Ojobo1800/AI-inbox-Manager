@@ -12,6 +12,7 @@ const InterviewsPage = lazy(() => import('./pages/InterviewsPage'));
 const InterviewEventsReportPage = lazy(() => import('./pages/InterviewEventsReportPage'));
 const ReviewPage = lazy(() => import('./pages/ReviewPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 
 // Loading fallback for lazy-loaded components
 const PageLoader = () => (
@@ -69,6 +70,11 @@ const AppRoutes = () => {
         <Route path="interview-events" element={
           <Suspense fallback={<PageLoader />}>
             <InterviewEventsReportPage />
+          </Suspense>
+        } />
+        <Route path="reports" element={
+          <Suspense fallback={<PageLoader />}>
+            <ReportsPage />
           </Suspense>
         } />
         <Route path="review" element={

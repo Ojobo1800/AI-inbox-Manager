@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from database import get_db
 from auth import get_current_user
-from models import ProcessRun, Classification, Approval, Email, UserSession
+from models import ProcessRun, Classification, Approval, Email, UserSession, InterviewEvent, Student, NotificationDraft
 from integration.process_runner import run_email_processing, get_run_lock_status
 
 router = APIRouter()
@@ -337,6 +337,182 @@ async def get_trends(
         daily_stats[date_key]["run_count"] += 1
 
     return {"trends": list(daily_stats.values())}
+
+
+@router.get("/student-activity")
+async def get_student_activity(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """Student activity: interview counts, notification status per student."""
+    from sqlalchemy import case
+    results = db.query(
+        Student.id,
+        Student.full_name,
+        Student.personal_email,
+        Student.is_active,
+        func.count(InterviewEvent.id).label("total_interviews"),
+        func.sum(case((NotificationDraft.email_status == "sent", 1), else_=0)).label("notified"),
+        func.max(InterviewEvent.created_at).label("last_interview_at"),
+    ).outerjoin(
+        InterviewEvent, InterviewEvent.student_id == Student.id
+    ).outerjoin(
+        NotificationDraft, NotificationDraft.interview_event_id == InterviewEvent.id
+    ).group_by(Student.id).order_by(func.count(InterviewEvent.id).desc()).all()
+
+    return [
+        {
+            "student_id": r.id,
+            "student_name": r.full_name or "Unknown",
+            "personal_email": r.personal_email,
+            "is_active": r.is_active,
+            "total_interviews": r.total_interviews or 0,
+            "notified": r.notified or 0,
+            "not_notified": (r.total_interviews or 0) - (r.notified or 0),
+            "last_interview_at": r.last_interview_at.isoformat() if r.last_interview_at else None,
+        }
+        for r in results
+    ]
+
+
+@router.get("/company-tracker")
+async def get_company_tracker(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """Top companies/recruiters reaching out with interview requests."""
+    results = db.query(
+        Classification.company_name,
+        func.count(Classification.id).label("total"),
+        func.max(Email.received_date).label("last_seen"),
+    ).join(
+        Email, Email.id == Classification.email_id
+    ).filter(
+        Classification.category == "Interview Request",
+        Classification.company_name != None,
+        Classification.company_name != "",
+    ).group_by(Classification.company_name).order_by(func.count(Classification.id).desc()).limit(50).all()
+
+    return [
+        {
+            "company_name": r.company_name,
+            "total_requests": r.total,
+            "last_seen": r.last_seen.isoformat() + "Z" if r.last_seen else None,
+        }
+        for r in results
+    ]
+
+
+@router.get("/missed-interviews")
+async def get_missed_interviews(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """Interview emails where student was never notified."""
+    results = db.query(
+        Email, Classification, InterviewEvent, Student, NotificationDraft
+    ).join(
+        Classification, Classification.email_id == Email.id
+    ).outerjoin(
+        InterviewEvent, InterviewEvent.email_id == Email.id
+    ).outerjoin(
+        Student, Student.id == InterviewEvent.student_id
+    ).outerjoin(
+        NotificationDraft, NotificationDraft.interview_event_id == InterviewEvent.id
+    ).filter(
+        Classification.category == "Interview Request",
+    ).filter(
+        (NotificationDraft.id == None) |
+        (NotificationDraft.email_status.notin_(["sent", "approved"]))
+    ).order_by(Email.received_date.desc()).all()
+
+    return [
+        {
+            "email_id": e.id,
+            "subject": e.subject,
+            "from_address": e.from_address,
+            "received_date": e.received_date.isoformat() + "Z",
+            "company_name": c.company_name,
+            "position": c.position,
+            "student_name": s.full_name if s else "Unknown",
+            "notification_status": n.email_status if n else "not_created",
+        }
+        for e, c, ie, s, n in results
+    ]
+
+
+@router.get("/weekly-summary")
+async def get_weekly_summary(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """One-page weekly summary for stakeholders."""
+    from datetime import date
+    today = datetime.utcnow()
+    week_start = today - timedelta(days=7)
+
+    runs = db.query(ProcessRun).filter(ProcessRun.run_timestamp >= week_start).all()
+
+    total_emails = sum(r.total_emails for r in runs)
+    total_interviews = sum(r.interview_requests for r in runs)
+    total_organized = sum(r.organized for r in runs)
+    total_deleted = sum(r.spam_deleted for r in runs)
+    successful_runs = sum(1 for r in runs if r.status == "success")
+
+    # Notifications sent this week
+    sent_count = db.query(NotificationDraft).filter(
+        NotificationDraft.sent_at >= week_start
+    ).count()
+
+    # Top companies this week
+    top_companies = db.query(
+        Classification.company_name,
+        func.count(Classification.id).label("cnt")
+    ).join(Email, Email.id == Classification.email_id).filter(
+        Classification.category == "Interview Request",
+        Email.received_date >= week_start,
+        Classification.company_name != None,
+    ).group_by(Classification.company_name).order_by(func.count(Classification.id).desc()).limit(5).all()
+
+    return {
+        "week_start": week_start.date().isoformat(),
+        "week_end": today.date().isoformat(),
+        "total_emails_processed": total_emails,
+        "interview_requests_found": total_interviews,
+        "emails_organized": total_organized,
+        "spam_deleted": total_deleted,
+        "processing_runs": len(runs),
+        "successful_runs": successful_runs,
+        "students_notified": sent_count,
+        "top_companies": [{"company": r.company_name, "count": r.cnt} for r in top_companies],
+    }
+
+
+@router.get("/pipeline")
+async def get_interview_pipeline(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """Interview pipeline funnel: emails → classified → notified → scheduled."""
+    total_emails = db.query(Email).count()
+    classified_interviews = db.query(Classification).filter(
+        Classification.category == "Interview Request"
+    ).count()
+    events_created = db.query(InterviewEvent).count()
+    notifications_sent = db.query(NotificationDraft).filter(
+        NotificationDraft.email_status.in_(["sent", "approved"])
+    ).count()
+    interviews_scheduled = db.query(InterviewEvent).filter(
+        InterviewEvent.interview_date != None
+    ).count()
+
+    return {
+        "total_emails": total_emails,
+        "classified_as_interview": classified_interviews,
+        "events_created": events_created,
+        "students_notified": notifications_sent,
+        "interviews_scheduled": interviews_scheduled,
+    }
 
 
 @router.get("/run-processing/status")
