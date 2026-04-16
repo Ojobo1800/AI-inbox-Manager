@@ -75,9 +75,17 @@ async def get_summary_stats(
     ).all()
 
     today_total = sum(r.total_emails for r in today_runs)
-    today_interview = sum(r.interview_requests for r in today_runs)
     today_organized = sum(r.organized for r in today_runs)
     today_spam = sum(r.spam_deleted for r in today_runs)
+
+    # Use actual email/classification table for interview counts (prevents double-counting
+    # caused by unread interview emails being re-processed on every run)
+    today_interview = db.query(Email).join(
+        Classification, Email.id == Classification.email_id
+    ).filter(
+        Classification.category == "Interview Request",
+        Email.fetch_timestamp >= today_start
+    ).count()
 
     # Week stats from ProcessRun records
     week_runs = db.query(ProcessRun).filter(
@@ -86,7 +94,13 @@ async def get_summary_stats(
 
     week_total = sum(r.total_emails for r in week_runs)
 
-    week_interview = sum(r.interview_requests for r in week_runs)
+    # Use actual email table for week interview count too
+    week_interview = db.query(Email).join(
+        Classification, Email.id == Classification.email_id
+    ).filter(
+        Classification.category == "Interview Request",
+        Email.fetch_timestamp >= week_ago
+    ).count()
 
     # Last run (still from ProcessRun for countdown timer)
     last_run = db.query(ProcessRun).order_by(

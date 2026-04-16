@@ -30,6 +30,10 @@ STUDENTS = [
     {"name": "Rutendo Bwerazuva",      "personal_email": "rbwerazuva@gmail.com",              "phone": "817-374-7504","assigned_to": "Vivek",   "assistant_email": "vivek@colaberry.com"},
     {"name": "Allan Smith Njeri",      "personal_email": "smithkariuki258@gmail.com",         "phone": "9133131870", "assigned_to": "Vivek",   "assistant_email": "vivek@colaberry.com"},
     {"name": "Abdulheli Mukunzi",      "personal_email": "abdulhelimukunzi@gmail.com",        "phone": "2073310181", "assigned_to": "Vivek",   "assistant_email": "vivek@colaberry.com"},
+    {"name": "Avworo", "personal_email": "", "phone": "", "assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
+    {"name": "Fabrice", "personal_email": "", "phone": "", "assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
+    {"name": "Emmanuel", "personal_email": "", "phone": "", "assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
+    {"name": "Promise", "personal_email": "", "phone": "", "assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"},
 ]
 
 # Always CC on every notification

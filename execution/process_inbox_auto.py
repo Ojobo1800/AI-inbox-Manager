@@ -626,41 +626,58 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                 # Check if genuine interview request OR from known company (safety check)
                 if is_genuine_interview_request(classification) or from_known_company:
                     # KEEP IN INBOX - Do not touch
-                    stats["interview_requests"] += 1
-                    stats["categories"][category] = stats["categories"].get(category, 0) + 1
                     company = classification["extracted_data"].get("company_name")
-
-                    interview_requests.append({
-                        "subject": email_subject,
-                        "company": company,
-                        "confidence": confidence,
-                        "timestamp": datetime.now().isoformat(),
-                        "safety_protected": from_known_company
-                    })
-
-                    if from_known_company:
-                        logger.info(f"[{idx}/{len(emails)}] ** SAFETY PROTECTED ** - {email_subject}")
-                        logger.info(f"              Company: {company}")
-                        logger.info(f"              Category: {category} (confidence: {confidence:.0%})")
-                        logger.info(f"              [KEPT IN INBOX - KNOWN INTERVIEW COMPANY]")
-                    else:
-                        logger.info(f"[{idx}/{len(emails)}] ** INTERVIEW REQUEST ** - {email_subject}")
-                        logger.info(f"              Company: {company}")
-                        logger.info(f"              [KEPT IN INBOX - NEEDS REVIEW]")
 
                     # Track folder for SharePoint audit log
                     _sp_folder_map[str(email_data.get("email_id", ""))] = "INBOX"
 
                     # Import email to database and process through interview pipeline
+                    # Only count as new interview request if email is truly new (not already in DB)
                     try:
+                        email_uid = str(email_data.get("email_id", ""))
+                        db = get_db_session()
+                        is_new_email = True
+                        if db and email_uid:
+                            from models import Email as EmailModel
+                            is_new_email = db.query(EmailModel).filter(EmailModel.email_id == email_uid).first() is None
+
                         email_db_id = import_email_to_db(email_data, classification, "INBOX")
+
+                        if is_new_email:
+                            # Only count and log new interview requests
+                            stats["interview_requests"] += 1
+                            stats["categories"][category] = stats["categories"].get(category, 0) + 1
+                            interview_requests.append({
+                                "subject": email_subject,
+                                "company": company,
+                                "confidence": confidence,
+                                "timestamp": datetime.now().isoformat(),
+                                "safety_protected": from_known_company
+                            })
+                            if from_known_company:
+                                logger.info(f"[{idx}/{len(emails)}] ** SAFETY PROTECTED (NEW) ** - {email_subject}")
+                                logger.info(f"              Company: {company}")
+                                logger.info(f"              Category: {category} (confidence: {confidence:.0%})")
+                                logger.info(f"              [KEPT IN INBOX - KNOWN INTERVIEW COMPANY]")
+                            else:
+                                logger.info(f"[{idx}/{len(emails)}] ** INTERVIEW REQUEST (NEW) ** - {email_subject}")
+                                logger.info(f"              Company: {company}")
+                                logger.info(f"              [KEPT IN INBOX - NEEDS REVIEW]")
+                        else:
+                            logger.info(f"[{idx}/{len(emails)}] [ALREADY PROCESSED] - {email_subject}")
+
                         if email_db_id:
-                            if process_interview_email(email_data, email_db_id, classification):
+                            if is_new_email and process_interview_email(email_data, email_db_id, classification):
                                 logger.info(f"              [INTERVIEW EVENT CREATED]")
+                            elif not is_new_email:
+                                pass  # Already processed, skip
                             else:
                                 logger.warning(f"              [INTERVIEW PROCESSING FAILED]")
                     except Exception as e:
                         logger.error(f"              [DB IMPORT FAILED: {e}]")
+                        # Still count as interview request if DB failed but email was new
+                        stats["interview_requests"] += 1
+                        stats["categories"][category] = stats["categories"].get(category, 0) + 1
 
                 elif category == "Other":
                     # SPAM - Delete
