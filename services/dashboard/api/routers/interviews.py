@@ -142,45 +142,65 @@ async def get_interview_requests(
     Returns:
         List of interview requests with email and classification data
     """
-    # Query for emails classified as Interview Request
-    # Also join with InterviewEvent and Student to get extracted details
-    results = db.query(Email, Classification, InterviewEvent, Student).join(
-        Classification, Email.id == Classification.email_id
-    ).outerjoin(
-        InterviewEvent, Email.id == InterviewEvent.email_id
-    ).outerjoin(
-        Student, InterviewEvent.student_id == Student.id
-    ).filter(
-        Classification.category == "Interview Request"
-    ).order_by(
-        desc(Email.received_date)
-    ).limit(limit).offset(offset).all()
+    try:
+        # Step 1: Get unique emails classified as Interview Request (deduplicated)
+        email_query = db.query(Email, Classification).join(
+            Classification, Email.id == Classification.email_id
+        ).filter(
+            Classification.category == "Interview Request"
+        ).order_by(
+            desc(Email.received_date)
+        ).limit(limit).offset(offset).all()
 
-    # Convert to response model
-    interview_requests = []
-    for email, classification, interview_event, student in results:
-        interview_requests.append(InterviewRequest(
-            id=email.id,
-            email_id=email.email_id,
-            subject=email.subject,
-            from_address=email.from_address,
-            received_date=email.received_date,
-            company_name=classification.company_name,
-            position=classification.position or (interview_event.position_title if interview_event else None),
-            confidence=classification.confidence,
-            classification_timestamp=classification.classification_timestamp,
-            body_preview=email.body_preview or "",
-            current_folder=email.current_folder,
-            student_name=student.full_name if student else "Unknown",
-            interview_type=normalize_sub_type(interview_event.sub_type) if interview_event else None,
-            interview_date=interview_event.interview_date if interview_event else None,
-            interview_time=interview_event.interview_time if interview_event else None,
-            contact_name=interview_event.contact_name if interview_event else None,
-            interview_event_id=interview_event.id if interview_event else None,
-            is_read=email.is_read
-        ))
+        # Step 2: For each email, get only the most recent InterviewEvent
+        interview_requests = []
+        seen_email_ids = set()
 
-    return interview_requests
+        for email, classification in email_query:
+            # Skip duplicates (shouldn't happen with this query but safety check)
+            if email.id in seen_email_ids:
+                continue
+            seen_email_ids.add(email.id)
+
+            # Get most recent InterviewEvent for this email
+            interview_event = db.query(InterviewEvent).filter(
+                InterviewEvent.email_id == email.id
+            ).order_by(desc(InterviewEvent.id)).first()
+
+            # Get student if interview_event has one
+            student = None
+            if interview_event and interview_event.student_id:
+                student = db.query(Student).filter(
+                    Student.id == interview_event.student_id
+                ).first()
+
+            interview_requests.append(InterviewRequest(
+                id=email.id,
+                email_id=email.email_id,
+                subject=email.subject,
+                from_address=email.from_address,
+                received_date=email.received_date,
+                company_name=classification.company_name,
+                position=classification.position or (interview_event.position_title if interview_event else None),
+                confidence=classification.confidence,
+                classification_timestamp=classification.classification_timestamp,
+                body_preview=email.body_preview or "",
+                current_folder=email.current_folder,
+                student_name=student.full_name if student else "Unknown",
+                interview_type=normalize_sub_type(interview_event.sub_type) if interview_event else None,
+                interview_date=interview_event.interview_date if interview_event else None,
+                interview_time=interview_event.interview_time if interview_event else None,
+                contact_name=interview_event.contact_name if interview_event else None,
+                interview_event_id=interview_event.id if interview_event else None,
+                is_read=email.is_read
+            ))
+
+        return interview_requests
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error fetching interview requests: {e}", exc_info=True)
+        return []
 
 
 @router.get("/count")
