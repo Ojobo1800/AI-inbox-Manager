@@ -71,6 +71,7 @@ export interface WhitelistCompany {
 export interface SummaryStats {
   today_total_emails: number;
   today_interview_requests: number;
+  total_interview_requests: number;
   today_organized: number;
   today_spam_deleted: number;
   week_total_emails: number;

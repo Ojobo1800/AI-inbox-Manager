@@ -253,7 +253,7 @@ const DashboardPage = () => {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <div className="text-3xl font-bold text-green-600">
-                  {stats?.today_interview_requests || 0}
+                  {stats?.total_interview_requests || 0}
                 </div>
               </div>
               <div className="ml-5 w-0 flex-1">

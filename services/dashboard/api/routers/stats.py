@@ -23,6 +23,7 @@ router = APIRouter()
 class SummaryStats(BaseModel):
     today_total_emails: int
     today_interview_requests: int
+    total_interview_requests: int
     today_organized: int
     today_spam_deleted: int
     week_total_emails: int
@@ -87,6 +88,13 @@ async def get_summary_stats(
         Email.fetch_timestamp >= today_start
     ).count()
 
+    # Total interview requests (all time) — used for dashboard card
+    total_interview = db.query(Email).join(
+        Classification, Email.id == Classification.email_id
+    ).filter(
+        Classification.category == "Interview Request"
+    ).count()
+
     # Week stats from ProcessRun records
     week_runs = db.query(ProcessRun).filter(
         ProcessRun.run_timestamp >= week_ago
@@ -120,6 +128,7 @@ async def get_summary_stats(
     result = SummaryStats(
         today_total_emails=today_total,
         today_interview_requests=today_interview,
+        total_interview_requests=total_interview,
         today_organized=today_organized,
         today_spam_deleted=today_spam,
         week_total_emails=week_total,
