@@ -179,10 +179,14 @@ async def get_category_breakdown(
         )
     ).all()
 
+    EXCLUDED_CATEGORIES = {'Job Alert', 'Application Notification'}
+
     aggregated: Dict[str, int] = {}
     for run in runs:
         breakdown = run.categories_breakdown or {}
         for category, count in breakdown.items():
+            if category in EXCLUDED_CATEGORIES:
+                continue
             aggregated[category] = aggregated.get(category, 0) + int(count)
 
     return [

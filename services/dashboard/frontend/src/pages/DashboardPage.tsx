@@ -458,19 +458,21 @@ const DashboardPage = () => {
         {/* Category Breakdown Donut Chart */}
         {categoryData && categoryData.length > 0 && (() => {
           const CATEGORY_COLORS: Record<string, string> = {
-            'Job Alert':                  '#3b82f6',  // blue
-            'Application Notification':   '#10b981',  // green
-            'Rejection':                  '#ef4444',  // red
-            'Interview Request':          '#8b5cf6',  // purple
-            'More Information Request':   '#f59e0b',  // amber
-            'Interview Reschedule':       '#06b6d4',  // cyan
-            'Offer':                      '#ec4899',  // pink
-            'Interview Confirmation':     '#84cc16',  // lime
-            'Interview Schedule':         '#f97316',  // orange
-            'Interview Cancelled':        '#6b7280',  // gray
+            'Job Alert':                  '#9333ea',  // purple
+            'Application Notification':   '#16a34a',  // green
+            'Rejection':                  '#dc2626',  // red
+            'Interview Request':          '#7c3aed',  // purple
+            'More Information Request':   '#2563eb',  // blue
+            'Interview Reschedule':       '#92400e',  // brown
+            'Offer':                      '#ca8a04',  // yellow
+            'Interview Confirmation':     '#16a34a',  // green
+            'Interview Schedule':         '#111827',  // black
+            'Interview Cancelled':        '#92400e',  // brown
+            'Assessment':                 '#ca8a04',  // yellow
+            'Phone Screen':               '#92400e',  // brown
           };
-          const FALLBACK_COLORS = ['#a855f7','#14b8a6','#eab308','#64748b'];
-          const filteredCategoryData = categoryData.filter(d => d.category !== 'Job Alert');
+          const FALLBACK_COLORS = ['#dc2626','#111827','#ca8a04','#7c3aed','#16a34a','#2563eb','#92400e'];
+          const filteredCategoryData = categoryData.filter(d => d.category !== 'Job Alert' && d.category !== 'Application Notification');
           const total = filteredCategoryData.reduce((sum, d) => sum + d.count, 0);
           let fallbackIdx = 0;
           return (
