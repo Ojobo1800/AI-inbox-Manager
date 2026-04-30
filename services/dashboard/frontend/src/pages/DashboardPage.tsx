@@ -112,7 +112,7 @@ const DashboardPage = () => {
 
   const { data: trends } = useQuery({
     queryKey: ['trends'],
-    queryFn: () => apiClient.getTrends(7),
+    queryFn: () => apiClient.getTrends(30),
   });
 
   const { data: upcomingInterviews } = useQuery({
@@ -456,67 +456,78 @@ const DashboardPage = () => {
       {/* Charts: Category Breakdown + Daily Trends — directly under stat cards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Category Breakdown Donut Chart */}
-        {categoryData && categoryData.length > 0 && (() => {
+        {(() => {
           const CATEGORY_COLORS: Record<string, string> = {
-            'Job Alert':                  '#9333ea',  // purple
-            'Application Notification':   '#16a34a',  // green
-            'Rejection':                  '#dc2626',  // red
-            'Interview Request':          '#7c3aed',  // purple
-            'More Information Request':   '#2563eb',  // blue
-            'Interview Reschedule':       '#92400e',  // brown
-            'Offer':                      '#ca8a04',  // yellow
-            'Interview Confirmation':     '#16a34a',  // green
-            'Interview Schedule':         '#111827',  // black
-            'Interview Cancelled':        '#92400e',  // brown
-            'Assessment':                 '#ca8a04',  // yellow
-            'Phone Screen':               '#92400e',  // brown
+            'Job Alert':                  '#9333ea',
+            'Application Notification':   '#16a34a',
+            'Rejection':                  '#dc2626',
+            'Interview Request':          '#7c3aed',
+            'More Information Request':   '#2563eb',
+            'Interview Reschedule':       '#92400e',
+            'Offer':                      '#ca8a04',
+            'Interview Confirmation':     '#16a34a',
+            'Interview Schedule':         '#111827',
+            'Interview Cancelled':        '#92400e',
+            'Assessment':                 '#ca8a04',
+            'Phone Screen':               '#92400e',
           };
           const FALLBACK_COLORS = ['#dc2626','#111827','#ca8a04','#7c3aed','#16a34a','#2563eb','#92400e'];
-          const filteredCategoryData = categoryData.filter(d => d.category !== 'Job Alert' && d.category !== 'Application Notification');
+          const filteredCategoryData = (categoryData ?? []).filter(d => d.category !== 'Job Alert' && d.category !== 'Application Notification');
           const total = filteredCategoryData.reduce((sum, d) => sum + d.count, 0);
           let fallbackIdx = 0;
           return (
             <div className="bg-white shadow rounded-lg overflow-hidden">
               <div className="bg-gray-200 px-6 py-3 text-center">
-                <h2 className="text-base font-bold text-gray-800">Category Breakdown (Last 7 Days)</h2>
+                <h2 className="text-base font-bold text-gray-800">Category Breakdown (Last 60 Days)</h2>
               </div>
               <div className="p-6">
-              <ResponsiveContainer width="100%" height={260}>
-                <PieChart>
-                  <Pie
-                    data={filteredCategoryData}
-                    dataKey="count"
-                    nameKey="category"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={65}
-                    outerRadius={100}
-                    paddingAngle={3}
-                  >
-                    {filteredCategoryData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={CATEGORY_COLORS[entry.category] ?? FALLBACK_COLORS[fallbackIdx++ % FALLBACK_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value: number) => [`${value} (${((value / total) * 100).toFixed(1)}%)`, 'Count']} />
-                  <Legend
-                    iconType="circle"
-                    iconSize={10}
-                    formatter={(value) => <span style={{ fontSize: 11 }}>{value}</span>}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+                {filteredCategoryData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={260}>
+                    <PieChart>
+                      <Pie
+                        data={filteredCategoryData}
+                        dataKey="count"
+                        nameKey="category"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={65}
+                        outerRadius={100}
+                        paddingAngle={3}
+                      >
+                        {filteredCategoryData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={CATEGORY_COLORS[entry.category] ?? FALLBACK_COLORS[fallbackIdx++ % FALLBACK_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => [`${value} (${((value / total) * 100).toFixed(1)}%)`, 'Count']} />
+                      <Legend
+                        iconType="circle"
+                        iconSize={10}
+                        formatter={(value) => <span style={{ fontSize: 11 }}>{value}</span>}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                    <svg className="h-12 w-12 mb-3 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
+                    </svg>
+                    <p className="text-sm font-medium">No category data available</p>
+                    <p className="text-xs mt-1">Data will appear after emails are processed</p>
+                  </div>
+                )}
               </div>
             </div>
           );
         })()}
 
         {/* Daily Trends */}
-        {trends && trends.trends && (
-          <div className="bg-white shadow rounded-lg overflow-hidden">
-            <div className="bg-gray-200 px-6 py-3 text-center">
-              <h2 className="text-base font-bold text-gray-800">Daily Trends (Last 7 Days)</h2>
-            </div>
-            <div className="p-6">
+        <div className="bg-white shadow rounded-lg overflow-hidden">
+          <div className="bg-gray-200 px-6 py-3 text-center">
+            <h2 className="text-base font-bold text-gray-800">Daily Trends (Last 30 Days)</h2>
+          </div>
+          <div className="p-6">
+            {trends && trends.trends && trends.trends.length > 0 ? (
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={trends.trends}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -529,9 +540,17 @@ const DashboardPage = () => {
                   <Bar dataKey="spam_deleted" fill="#ef4444" name="Deleted" />
                 </BarChart>
               </ResponsiveContainer>
-            </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                <svg className="h-12 w-12 mb-3 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                <p className="text-sm font-medium">No trend data available</p>
+                <p className="text-xs mt-1">Data will appear after emails are processed</p>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Quick Actions Banner */}

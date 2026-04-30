@@ -164,7 +164,7 @@ async def get_category_breakdown(
     if start_date:
         start = datetime.strptime(start_date, "%Y-%m-%d")
     else:
-        start = datetime.utcnow() - timedelta(days=7)
+        start = datetime.utcnow() - timedelta(days=60)
 
     if end_date:
         end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
@@ -322,7 +322,7 @@ async def get_processing_runs(
 
 @router.get("/trends")
 async def get_trends(
-    days: int = Query(7, ge=1, le=30, description="Number of days to analyze"),
+    days: int = Query(30, ge=1, le=90, description="Number of days to analyze"),
     db: Session = Depends(get_db),
     user: UserSession = Depends(get_current_user)
 ):
