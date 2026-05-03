@@ -1,4 +1,4 @@
-name: Deploy Backend to Railway
+name: Deploy Backend to Render
 
 on:
   workflow_dispatch:
@@ -16,14 +16,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Trigger Render deploy hook
         run: |
-          railway up --service ${{ secrets.RAILWAY_SERVICE_ID }} --detach
+          curl -s --fail -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+          echo "Deploy triggered on Render."
