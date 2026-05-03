@@ -528,19 +528,34 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
 
         # Category to server folder mapping
         category_to_folder = {
-            "Job Alert": "Job Alerts",  # Note: Plural on server
-            "Application Notification": "Application Notification",
-            "Interview Confirmation": "Interview Confirmation",
-            "Interview Schedule": "Interview Scheduling",
-            "Interview Reschedule": "Interview Rescheduled",
-            "Interview Cancelled": "Interview Cancelled",
+            # Interview flow
+            "Interview Confirmation":    "Interview Confirmation",
+            "Interview Schedule":        "Interview Scheduling",
+            "Interview Reschedule":      "Interview Rescheduled",
+            "Interview Cancelled":       "Interview Cancelled",
             "Final Interview Scheduled": "Final Interview Scheduled",
-            "Rejection": "Rejection",
-            "More Information Request": "More Information Request",
-            "Offer": "Offer",
-            "Background Check": "Background Check",
-            "Assessment": "Assessment",
-            "Phone Screen": "Phone Screen (HR or Recruiter)"
+            "Instant Interview":         "Instant Interview",
+            "Client Screen":             "Client Screen",
+            "Phone Screen":              "Phone Screen (HR or Recruiter)",
+            # Outcomes
+            "Rejection":                 "Rejection",
+            "Offer":                     "Offer",
+            # Jobs & applications
+            "Job Alert":                 "Job Alerts",
+            "Job Invite":                "Job Invite",
+            "Job Machine":               "Job Machine",
+            "Application Notification":  "Application Notification",
+            # Actions & requests
+            "More Information Request":  "More Information Request",
+            "Background Check":          "Background Check",
+            "Assessment":                "Assessment",
+            "Google Sheet Request":      "Google Sheet Request",
+            # System / noise
+            "LinkedIn Notification":     "LinkedIn Notification",
+            "Gmail Notification":        "Gmail Notification",
+            "Forwarded Email":           "Forwarded Emails",
+            "Basecamp":                  "Basecamp",
+            "Account Recovery":          "Account Recovery",
         }
 
         logger.info("")

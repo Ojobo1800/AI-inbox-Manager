@@ -33,16 +33,27 @@ APPROVED_CATEGORIES = [
     "Interview Request",
     "Interview Schedule",
     "Interview Reschedule",
+    "Interview Confirmation",
     "Interview Cancelled",
     "Final Interview Scheduled",
+    "Instant Interview",
+    "Client Screen",
+    "Phone Screen",
     "Rejection",
+    "Offer",
     "Job Alert",
+    "Job Invite",
+    "Job Machine",
     "Application Notification",
     "More Information Request",
-    "Offer",
     "Background Check",
     "Assessment",
-    "Phone Screen",
+    "LinkedIn Notification",
+    "Google Sheet Request",
+    "Gmail Notification",
+    "Forwarded Email",
+    "Basecamp",
+    "Account Recovery",
     "Other"
 ]
 
@@ -160,7 +171,57 @@ You are an AI classifier for an automated inbox management system that processes
 - Signals: "phone screen", "brief call", "quick conversation", "initial chat"
 - Confidence: Medium-High (can overlap with Interview Request)
 
-**16. Other**
+**16. Instant Interview**
+- Immediate or on-the-spot interview request with no scheduling needed
+- Signals: "interview right now", "instant interview", "interview immediately", "start now"
+- Confidence: High if urgency and immediacy are explicit
+
+**17. Client Screen**
+- Screening conducted by the client company (not an internal HR/recruiter screen)
+- Signals: "client interview", "client screen", "meet with the client", "client wants to speak"
+- Confidence: High if client involvement is explicit
+
+**18. Job Invite**
+- Direct invitation to apply for a specific job role
+- Signals: "you've been invited to apply", "job opportunity for you", "we think you'd be a great fit for"
+- Confidence: High if personal job invitation language present
+
+**19. Job Machine**
+- Automated Colaberry job application system notification or job-machine-submitted application receipt
+- Signals: references to Colaberry job machine, automated application submissions, job machine results
+- Confidence: High if job machine system is referenced
+
+**20. LinkedIn Notification**
+- Automated notification from LinkedIn (connection requests, profile views, InMail, job alerts)
+- Signals: from linkedin.com, "viewed your profile", "wants to connect", LinkedIn InMail
+- Confidence: Very High if from LinkedIn domain
+
+**21. Google Sheet Request**
+- Request or notification related to a Google Sheet (access request, sharing, update)
+- Signals: "Google Sheets", "spreadsheet access", "shared a Google Sheet", "sheet update"
+- Confidence: High if Google Sheets is explicitly mentioned
+
+**22. Gmail Notification**
+- System notification from Gmail itself (storage, security alerts, account notices)
+- Signals: from google.com/gmail.com system, "Gmail storage", "sign-in attempt", Gmail security
+- Confidence: Very High if Gmail system sender
+
+**23. Forwarded Email**
+- Email that has been forwarded as context or for action
+- Signals: "---------- Forwarded message ---------", "FW:", "Fwd:", forwarding language
+- Confidence: High if forwarding headers present
+
+**24. Basecamp**
+- Notification or message from Basecamp project management platform
+- Signals: from basecamp.com, "Basecamp", project or task notification from Basecamp
+- Confidence: Very High if Basecamp sender or branding
+
+**25. Account Recovery**
+- Account recovery, password reset, or security verification email
+- Signals: "reset your password", "verify your account", "account recovery", "security code"
+- Confidence: Very High if recovery/reset language present
+
+**26. Other**
 - Does not fit above categories
 - Use when: unclear intent, spam, non-relevant, multi-intent without clear primary
 - Confidence: Low-Medium

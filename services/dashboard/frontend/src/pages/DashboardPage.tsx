@@ -458,19 +458,35 @@ const DashboardPage = () => {
         {/* Category Breakdown Donut Chart */}
         {(() => {
           const CATEGORY_COLORS: Record<string, string> = {
-            'Job Alert':                  '#9333ea',
-            'Application Notification':   '#6b7280',
-            'Rejection':                  '#dc2626',
+            // Interview flow
             'Interview Request':          '#2563eb',
-            'More Information Request':   '#0ea5e9',
-            'Interview Reschedule':       '#f97316',
-            'Offer':                      '#8b5cf6',
-            'Interview Confirmation':     '#16a34a',
             'Interview Schedule':         '#16a34a',
+            'Interview Reschedule':       '#f97316',
+            'Interview Confirmation':     '#16a34a',
             'Interview Cancelled':        '#ef4444',
-            'Assessment':                 '#f59e0b',
+            'Final Interview Scheduled':  '#059669',
+            'Instant Interview':          '#f59e0b',
+            'Client Screen':              '#7c3aed',
             'Phone Screen':               '#0ea5e9',
+            // Outcomes
+            'Rejection':                  '#dc2626',
+            'Offer':                      '#8b5cf6',
+            // Jobs & applications
+            'Job Alert':                  '#9333ea',
+            'Job Invite':                 '#06b6d4',
+            'Job Machine':                '#6366f1',
+            'Application Notification':   '#6b7280',
+            // Actions & requests
+            'More Information Request':   '#0ea5e9',
             'Background Check':           '#eab308',
+            'Assessment':                 '#f59e0b',
+            'Google Sheet Request':       '#15803d',
+            // System / noise
+            'LinkedIn Notification':      '#0077b5',
+            'Gmail Notification':         '#ea4335',
+            'Forwarded Email':            '#9ca3af',
+            'Basecamp':                   '#1d4ed8',
+            'Account Recovery':           '#78716c',
           };
           const FALLBACK_COLORS = ['#dc2626','#111827','#ca8a04','#7c3aed','#16a34a','#2563eb','#92400e'];
           const filteredCategoryData = (categoryData ?? []).filter(d => d.category !== 'Job Alert' && d.category !== 'Application Notification');

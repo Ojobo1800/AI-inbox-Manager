@@ -122,9 +122,28 @@ def move_emails(
     if not email_moves:
         return 0
 
+    def _ensure_folder(imap_conn, folder: str) -> bool:
+        """Create folder/label if it does not already exist. Returns True if ready."""
+        quoted = f'"{folder}"'
+        status, data = imap_conn.select(quoted)
+        if status == "OK":
+            return True
+        # Folder missing — create it
+        status, data = imap_conn.create(quoted)
+        if status == "OK":
+            logger.info(f"Created Gmail label/folder: {folder}")
+            return True
+        logger.warning(f"Could not create folder '{folder}': {data}")
+        return False
+
     try:
         # Connect
         imap = connect_to_imap(server, port, email_address, password)
+
+        # Pre-create all destination folders that don't exist yet
+        needed_folders = set(email_moves.values())
+        for folder in needed_folders:
+            _ensure_folder(imap, folder)
 
         # Select source folder (writable)
         imap.select(source_folder)
