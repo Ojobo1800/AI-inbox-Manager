@@ -459,17 +459,18 @@ const DashboardPage = () => {
         {(() => {
           const CATEGORY_COLORS: Record<string, string> = {
             'Job Alert':                  '#9333ea',
-            'Application Notification':   '#16a34a',
+            'Application Notification':   '#6b7280',
             'Rejection':                  '#dc2626',
-            'Interview Request':          '#7c3aed',
-            'More Information Request':   '#2563eb',
-            'Interview Reschedule':       '#92400e',
-            'Offer':                      '#ca8a04',
+            'Interview Request':          '#2563eb',
+            'More Information Request':   '#0ea5e9',
+            'Interview Reschedule':       '#f97316',
+            'Offer':                      '#8b5cf6',
             'Interview Confirmation':     '#16a34a',
-            'Interview Schedule':         '#111827',
-            'Interview Cancelled':        '#92400e',
-            'Assessment':                 '#ca8a04',
-            'Phone Screen':               '#92400e',
+            'Interview Schedule':         '#16a34a',
+            'Interview Cancelled':        '#ef4444',
+            'Assessment':                 '#f59e0b',
+            'Phone Screen':               '#0ea5e9',
+            'Background Check':           '#eab308',
           };
           const FALLBACK_COLORS = ['#dc2626','#111827','#ca8a04','#7c3aed','#16a34a','#2563eb','#92400e'];
           const filteredCategoryData = (categoryData ?? []).filter(d => d.category !== 'Job Alert' && d.category !== 'Application Notification');
