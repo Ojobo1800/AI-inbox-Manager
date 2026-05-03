@@ -7,7 +7,7 @@ import { toZonedTime } from 'date-fns-tz';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import CountdownTimer from '../components/CountdownTimer';
 import InterviewChecklist from '../components/InterviewChecklist';
-import type { InterviewRequest, UpcomingInterview } from '../types';
+import type { InterviewRequest } from '../types';
 
 const TYPE_STYLES: Record<string, string> = {
   'interview_request': 'bg-blue-100 text-blue-800',
@@ -51,7 +51,7 @@ const DashboardPage = () => {
       queryClient.invalidateQueries({ queryKey: ['categoryBreakdown'] });
       queryClient.invalidateQueries({ queryKey: ['trends'] });
       queryClient.invalidateQueries({ queryKey: ['recentInterviews'] });
-      queryClient.invalidateQueries({ queryKey: ['upcomingInterviews'] });
+      queryClient.invalidateQueries({ queryKey: ['offers'] });
       queryClient.invalidateQueries({ queryKey: ['inboxCount'] });
       queryClient.invalidateQueries({ queryKey: ['engineeringKPIs'] });
       setTimeout(() => setRunResult(null), 8000);
@@ -115,9 +115,9 @@ const DashboardPage = () => {
     queryFn: () => apiClient.getTrends(7),
   });
 
-  const { data: upcomingInterviews } = useQuery({
-    queryKey: ['upcomingInterviews'],
-    queryFn: () => apiClient.getUpcomingInterviews(),
+  const { data: offers } = useQuery({
+    queryKey: ['offers'],
+    queryFn: () => apiClient.getOffers(20),
     staleTime: 0,
     refetchOnMount: 'always',
   });
@@ -603,85 +603,55 @@ const DashboardPage = () => {
         </div>
       )}
 
-      {/* Upcoming Scheduled Interviews */}
+      {/* Offers Received */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="bg-gray-200 px-6 py-3 flex items-center justify-between">
-          <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Upcoming Scheduled Interviews</h2>
-          <Link to="/interviews" className="text-sm text-primary-600 hover:text-primary-700 font-medium ml-4">
-            View all
-          </Link>
+          <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Offers Received</h2>
         </div>
         <div className="px-4 py-5 sm:p-6">
-          {upcomingInterviews && upcomingInterviews.length > 0 ? (
+          {offers && offers.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Time</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Candidate</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Received</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Company</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Position</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Format</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Link</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Subject</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">From</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Confidence</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {(upcomingInterviews as UpcomingInterview[]).map((item, idx) => {
-                    const isToday = item.interview_date === new Date().toISOString().slice(0, 10);
-                    return (
-                      <tr key={item.interview_event_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">
-                          <span className={isToday ? 'text-primary-600 font-bold' : ''}>
-                            {item.interview_date
-                              ? new Date(item.interview_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                              : '—'}
+                  {offers.map((offer: any, idx: number) => (
+                    <tr key={offer.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-3 py-2 whitespace-nowrap text-gray-700">
+                        {offer.received_date
+                          ? new Date(offer.received_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                          : '—'}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">{offer.company_name || '—'}</td>
+                      <td className="px-3 py-2 text-gray-700 max-w-[160px] truncate" title={offer.position || ''}>{offer.position || '—'}</td>
+                      <td className="px-3 py-2 text-gray-700 max-w-[200px] truncate" title={offer.subject || ''}>{offer.subject || '—'}</td>
+                      <td className="px-3 py-2 text-gray-600 max-w-[180px] truncate" title={offer.from_address || ''}>{offer.from_address || '—'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {offer.confidence != null ? (
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                            offer.confidence >= 0.9 ? 'bg-green-100 text-green-800' :
+                            offer.confidence >= 0.7 ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {Math.round(offer.confidence * 100)}%
                           </span>
-                          {isToday && (
-                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-primary-100 text-primary-700 rounded font-semibold">Today</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap text-gray-700">
-                          {item.interview_time || '—'}
-                          {item.interview_timezone && (
-                            <span className="ml-1 text-xs text-gray-400">{item.interview_timezone}</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap text-gray-900 font-medium">{item.student_name || '—'}</td>
-                        <td className="px-3 py-2 whitespace-nowrap text-gray-700">{item.company_name || '—'}</td>
-                        <td className="px-3 py-2 text-gray-700 max-w-[160px] truncate" title={item.position || ''}>{item.position || '—'}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          {item.interview_type ? (
-                            <span className={`px-2 py-0.5 text-xs font-medium rounded ${TYPE_STYLES[item.interview_type] || 'bg-gray-100 text-gray-800'}`}>
-                              {TYPE_LABELS[item.interview_type] || item.interview_type}
-                            </span>
-                          ) : '—'}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap text-gray-700 capitalize">{item.interview_format || '—'}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          {item.meeting_link ? (
-                            <a
-                              href={item.meeting_link}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center text-primary-600 hover:text-primary-800 text-xs font-medium"
-                            >
-                              Join
-                              <svg className="ml-1 h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                              </svg>
-                            </a>
-                          ) : '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                        ) : '—'}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           ) : (
-            <p className="text-sm text-gray-500 text-center py-8">No upcoming interviews scheduled</p>
+            <p className="text-sm text-gray-500 text-center py-8">No offers received yet</p>
           )}
         </div>
       </div>

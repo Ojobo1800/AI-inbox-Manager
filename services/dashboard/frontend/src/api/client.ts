@@ -369,6 +369,11 @@ class ApiClient {
     return response.data;
   }
 
+  async getOffers(limit = 20): Promise<any[]> {
+    const response = await this.client.get('/api/stats/offers', { params: { limit } });
+    return response.data;
+  }
+
   async getInterviewPipeline(): Promise<any> {
     const response = await this.client.get('/api/stats/pipeline');
     return response.data;
