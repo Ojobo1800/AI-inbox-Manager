@@ -10,6 +10,16 @@ from sqlalchemy import func, and_
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+_CENTRAL = ZoneInfo("America/Chicago")
+
+
+def _today_start_utc() -> datetime:
+    """Return midnight Central Time today as a naive UTC datetime for DB queries."""
+    now_central = datetime.now(_CENTRAL)
+    midnight_central = now_central.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight_central.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
 from database import get_db
 from auth import get_current_user
@@ -67,7 +77,7 @@ async def get_summary_stats(
     Returns real-time stats aggregated from ProcessRun records (written after every scheduled run).
     """
     now = datetime.utcnow()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = _today_start_utc()
     week_ago = now - timedelta(days=7)
 
     # Aggregate today's stats from ProcessRun records (always populated by processing script)
@@ -252,10 +262,10 @@ async def get_engineering_kpis(
         - Failure rate over the last 7 days (%)
     """
     now = datetime.utcnow()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = _today_start_utc()
     week_ago = now - timedelta(days=7)
 
-    # AI Cost Today — sum gpt_cost_usd for all runs since midnight UTC
+    # AI Cost Today — sum gpt_cost_usd for all runs since midnight Central Time
     today_runs = db.query(ProcessRun).filter(
         ProcessRun.run_timestamp >= today_start
     ).all()
