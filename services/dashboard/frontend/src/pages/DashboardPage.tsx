@@ -470,7 +470,7 @@ const DashboardPage = () => {
             'Phone Screen':               '#0ea5e9',
             // Outcomes
             'Rejection':                  '#dc2626',
-            'Offer':                      '#8b5cf6',
+            'Offer':                      '#16a34a',
             // Jobs & applications
             'Job Alert':                  '#9333ea',
             'Job Invite':                 '#06b6d4',
