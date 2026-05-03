@@ -107,12 +107,12 @@ const DashboardPage = () => {
   // Stats charts data
   const { data: categoryData } = useQuery({
     queryKey: ['categoryBreakdown'],
-    queryFn: () => apiClient.getCategoryBreakdown(),
+    queryFn: () => apiClient.getCategoryBreakdown(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)),
   });
 
   const { data: trends } = useQuery({
     queryKey: ['trends'],
-    queryFn: () => apiClient.getTrends(30),
+    queryFn: () => apiClient.getTrends(7),
   });
 
   const { data: upcomingInterviews } = useQuery({
@@ -479,7 +479,7 @@ const DashboardPage = () => {
           return (
             <div className="bg-white shadow rounded-lg overflow-hidden">
               <div className="bg-gray-200 px-6 py-3 text-center">
-                <h2 className="text-base font-bold text-gray-800">Category Breakdown (Last 60 Days)</h2>
+                <h2 className="text-base font-bold text-gray-800">Category Breakdown (Last 30 Days)</h2>
               </div>
               <div className="p-6">
                 {filteredCategoryData.length > 0 ? (
@@ -525,7 +525,7 @@ const DashboardPage = () => {
         {/* Daily Trends */}
         <div className="bg-white shadow rounded-lg overflow-hidden">
           <div className="bg-gray-200 px-6 py-3 text-center">
-            <h2 className="text-base font-bold text-gray-800">Daily Trends (Last 30 Days)</h2>
+            <h2 className="text-base font-bold text-gray-800">Daily Trends (Last 7 Days)</h2>
           </div>
           <div className="p-6">
             {trends && trends.trends && trends.trends.length > 0 ? (
