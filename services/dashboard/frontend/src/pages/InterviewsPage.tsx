@@ -4,7 +4,7 @@ import { apiClient } from '../api/client';
 import { format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import InterviewChecklist from '../components/InterviewChecklist';
-import type { InterviewRequest } from '../types';
+import type { InterviewRequest, UpcomingInterview } from '../types';
 
 const TYPE_STYLES: Record<string, string> = {
   'interview_request': 'bg-blue-100 text-blue-800',
@@ -44,6 +44,13 @@ const InterviewsPage = () => {
   const { data: countData } = useQuery({
     queryKey: ['interviewCount'],
     queryFn: () => apiClient.getInterviewCount(),
+  });
+
+  const { data: upcomingInterviews } = useQuery({
+    queryKey: ['upcomingInterviews'],
+    queryFn: () => apiClient.getUpcomingInterviews(),
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   const formatDateCST = (dateString: string) => {
@@ -332,6 +339,86 @@ const InterviewsPage = () => {
                 </>
               )}
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* Upcoming Scheduled Interviews */}
+      <div className="bg-white shadow rounded-lg overflow-hidden">
+        <div className="bg-gray-200 px-6 py-3">
+          <h2 className="text-base font-bold text-gray-800 text-center">Upcoming Scheduled Interviews</h2>
+        </div>
+        <div className="px-4 py-5 sm:p-6">
+          {upcomingInterviews && upcomingInterviews.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Time</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Candidate</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Company</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Position</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Format</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Link</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {(upcomingInterviews as UpcomingInterview[]).map((item, idx) => {
+                    const isToday = item.interview_date === new Date().toISOString().slice(0, 10);
+                    return (
+                      <tr key={item.interview_event_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">
+                          <span className={isToday ? 'text-primary-600 font-bold' : ''}>
+                            {item.interview_date
+                              ? new Date(item.interview_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                              : '—'}
+                          </span>
+                          {isToday && (
+                            <span className="ml-2 px-1.5 py-0.5 text-xs bg-primary-100 text-primary-700 rounded font-semibold">Today</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-700">
+                          {item.interview_time || '—'}
+                          {item.interview_timezone && (
+                            <span className="ml-1 text-xs text-gray-400">{item.interview_timezone}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-900 font-medium">{item.student_name || '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-700">{item.company_name || '—'}</td>
+                        <td className="px-3 py-2 text-gray-700 max-w-[160px] truncate" title={item.position || ''}>{item.position || '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {item.interview_type ? (
+                            <span className={`px-2 py-0.5 text-xs font-medium rounded ${TYPE_STYLES[item.interview_type] || 'bg-gray-100 text-gray-800'}`}>
+                              {TYPE_LABELS[item.interview_type] || item.interview_type}
+                            </span>
+                          ) : '—'}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-700 capitalize">{item.interview_format || '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {item.meeting_link ? (
+                            <a
+                              href={item.meeting_link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center text-primary-600 hover:text-primary-800 text-xs font-medium"
+                            >
+                              Join
+                              <svg className="ml-1 h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                              </svg>
+                            </a>
+                          ) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500 text-center py-8">No upcoming interviews scheduled</p>
           )}
         </div>
       </div>
