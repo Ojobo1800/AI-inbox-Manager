@@ -5,10 +5,6 @@ on:
     - cron: '0 */2 * * *'   # Runs every 2 hours (UTC)
   workflow_dispatch:          # Allow manual trigger from GitHub UI
 
-permissions:
-  contents: read
-  secrets: write
-
 jobs:
   process:
     runs-on: ubuntu-latest
@@ -77,13 +73,16 @@ jobs:
 
       - name: Refresh Gmail token secret
         if: always()
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_FOR_SECRETS }}
         run: |
-          if [ -f config/gmail_token.json ]; then
+          if [ -f config/gmail_token.json ] && [ -n "$GH_TOKEN" ]; then
             NEW_TOKEN=$(base64 -w 0 config/gmail_token.json)
             gh secret set GMAIL_TOKEN_JSON --body "$NEW_TOKEN" --repo ${{ github.repository }}
             echo "Gmail token secret updated."
+          else
+            echo "Skipping token refresh (no PAT configured)."
           fi
 
       - name: Upload logs as artifact
