@@ -457,41 +457,22 @@ const DashboardPage = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Category Breakdown Donut Chart */}
         {(() => {
+          const ALLOWED_CATEGORIES = [
+            'Offer',
+            'Rejection',
+            'Interview Request',
+            'Interview Schedule',
+            'Interview Confirmation',
+          ];
           const CATEGORY_COLORS: Record<string, string> = {
-            // Interview flow
-            'Interview Request':          '#2563eb',
-            'Interview Schedule':         '#16a34a',
-            'Interview Reschedule':       '#f97316',
-            'Interview Confirmation':     '#16a34a',
-            'Interview Cancelled':        '#ef4444',
-            'Final Interview Scheduled':  '#059669',
-            'Instant Interview':          '#f59e0b',
-            'Client Screen':              '#7c3aed',
-            'Phone Screen':               '#0ea5e9',
-            // Outcomes
-            'Rejection':                  '#dc2626',
-            'Offer':                      '#16a34a',
-            // Jobs & applications
-            'Job Alert':                  '#9333ea',
-            'Job Invite':                 '#06b6d4',
-            'Job Machine':                '#6366f1',
-            'Application Notification':   '#6b7280',
-            // Actions & requests
-            'More Information Request':   '#0ea5e9',
-            'Background Check':           '#eab308',
-            'Assessment':                 '#f59e0b',
-            'Google Sheet Request':       '#15803d',
-            // System / noise
-            'LinkedIn Notification':      '#0077b5',
-            'Gmail Notification':         '#ea4335',
-            'Forwarded Email':            '#9ca3af',
-            'Basecamp':                   '#1d4ed8',
-            'Account Recovery':           '#78716c',
+            'Offer':                  '#22c55e',  // green
+            'Rejection':              '#dc2626',  // red
+            'Interview Request':      '#2563eb',  // blue
+            'Interview Schedule':     '#f97316',  // orange
+            'Interview Confirmation': '#8b5cf6',  // purple
           };
-          const FALLBACK_COLORS = ['#dc2626','#111827','#ca8a04','#7c3aed','#16a34a','#2563eb','#92400e'];
-          const filteredCategoryData = (categoryData ?? []).filter(d => d.category !== 'Job Alert' && d.category !== 'Application Notification');
+          const filteredCategoryData = (categoryData ?? []).filter(d => ALLOWED_CATEGORIES.includes(d.category));
           const total = filteredCategoryData.reduce((sum, d) => sum + d.count, 0);
-          let fallbackIdx = 0;
           return (
             <div className="bg-white shadow rounded-lg overflow-hidden">
               <div className="bg-gray-200 px-6 py-3 text-center">
@@ -512,7 +493,7 @@ const DashboardPage = () => {
                         paddingAngle={3}
                       >
                         {filteredCategoryData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={CATEGORY_COLORS[entry.category] ?? FALLBACK_COLORS[fallbackIdx++ % FALLBACK_COLORS.length]} />
+                          <Cell key={`cell-${index}`} fill={CATEGORY_COLORS[entry.category] ?? '#6b7280'} />
                         ))}
                       </Pie>
                       <Tooltip formatter={(value: number) => [`${value} (${((value / total) * 100).toFixed(1)}%)`, 'Count']} />
