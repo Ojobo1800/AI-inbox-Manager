@@ -137,9 +137,10 @@ You are an AI classifier for an automated inbox management system that processes
 
 **9. Job Alert**
 - **Automated job posting notification - NOT a personal interview request**
-- Signals: "jobs matching your criteria", "new opportunities", "job alert", from job boards
-- Confidence: High if from job board/aggregator (Indeed, LinkedIn, ZipRecruiter, etc.)
-- **Critical**: Must distinguish from Interview Request (which is personal outreach)
+- **SENDER RULE**: If the sender email domain is @indeed.com, @jobleads.com, @ziprecruiter.com, @glassdoor.com, @monster.com, @dice.com, @careerbuilder.com, @simplyhired.com, @lensa.com, @linkedin.com (job digest), or any job board aggregator → ALWAYS "Job Alert" regardless of subject content
+- Signals: "jobs matching your criteria", "new opportunities", "job alert", "jobs just posted", job recommendations, hiring alerts, "X more jobs"
+- Confidence: Very High if from job board domain; High if job alert language present
+- **Critical**: Must distinguish from Interview Request (which is PERSONAL direct outreach from a company)
 
 **10. Application Notification**
 - Confirmation that application was received
@@ -152,9 +153,14 @@ You are an AI classifier for an automated inbox management system that processes
 - Confidence: High if explicit request present
 
 **12. Offer**
-- Job offer extended
-- Signals: "pleased to offer", "offer letter", "extend an offer", compensation details
-- Confidence: Very High if offer explicit
+- **STRICT DEFINITION**: A job offer of employment extended to a specific candidate by an employer
+- **Must have**: Language like "pleased to offer you the position", "offer letter", "extend an offer of employment", salary/compensation details, start date for a job role
+- **CRITICAL EXCLUSIONS — these are NEVER "Offer"**:
+  - Retail deals, sales, discounts ("50% off", "snag a deal", "save $X") → classify as "Other"
+  - Promotional marketing from stores, brands, or retailers → classify as "Other"
+  - Job board listings or job recommendation emails → classify as "Job Alert" or "Job Invite"
+  - Any email where "offer" refers to a product, service, discount, or subscription
+- Confidence: Very High ONLY if it contains explicit employment offer language with a job role
 
 **13. Background Check**
 - Background check or reference request
@@ -193,8 +199,9 @@ You are an AI classifier for an automated inbox management system that processes
 
 **20. LinkedIn Notification**
 - Automated notification from LinkedIn (connection requests, profile views, InMail, job alerts)
-- Signals: from linkedin.com, "viewed your profile", "wants to connect", LinkedIn InMail
-- Confidence: Very High if from LinkedIn domain
+- **SENDER RULE**: The sender MUST be from @linkedin.com or @e.linkedin.com domain. If not from LinkedIn, do NOT use this category.
+- Signals: "viewed your profile", "wants to connect", LinkedIn InMail, LinkedIn job alerts
+- Confidence: Very High if from LinkedIn domain; do NOT assign this if sender is not from LinkedIn
 
 **21. Google Sheet Request**
 - Request or notification related to a Google Sheet (access request, sharing, update)
@@ -202,9 +209,15 @@ You are an AI classifier for an automated inbox management system that processes
 - Confidence: High if Google Sheets is explicitly mentioned
 
 **22. Gmail Notification**
-- System notification from Gmail itself (storage, security alerts, account notices)
-- Signals: from google.com/gmail.com system, "Gmail storage", "sign-in attempt", Gmail security
-- Confidence: Very High if Gmail system sender
+- **STRICT DEFINITION**: System notification sent BY Gmail/Google about your Gmail account
+- **SENDER RULE**: The sender MUST be from an official Google domain (@google.com, @accounts.google.com, @googlemail.com, no-reply@google.com). If not from Google's official system, do NOT use this category.
+- **Specific signals**: Gmail storage warnings, Gmail security alert, Gmail forwarding confirmation, Google account sign-in notice
+- **CRITICAL EXCLUSIONS — these are NEVER "Gmail Notification"**:
+  - Emails from Indeed, LinkedIn, ZipRecruiter → "Job Alert"
+  - Emails from retailers or promotional senders → "Other"
+  - Verification codes from non-Google services → "Account Recovery"
+  - Any email whose sender is not an official @google.com address
+- Confidence: Very High ONLY if sender is from official Google domain AND content is about Gmail/Google account
 
 **23. Forwarded Email**
 - Email that has been forwarded as context or for action
@@ -217,9 +230,14 @@ You are an AI classifier for an automated inbox management system that processes
 - Confidence: Very High if Basecamp sender or branding
 
 **25. Account Recovery**
-- Account recovery, password reset, or security verification email
-- Signals: "reset your password", "verify your account", "account recovery", "security code"
-- Confidence: Very High if recovery/reset language present
+- **STRICT DEFINITION**: Password reset, account verification, or security code email from ANY service
+- **Signals**: "reset your password", "verify your account", "your verification code is", "account recovery", "security code", "confirm your email address", OTP codes
+- **CRITICAL EXCLUSIONS — these are NEVER "Account Recovery"**:
+  - Job alert or job recommendation emails → "Job Alert"
+  - Retail or promotional emails → "Other"
+  - LinkedIn/social notifications → "LinkedIn Notification"
+  - General job-related emails → appropriate job category
+- Confidence: Very High ONLY if the email contains an actual reset link, verification code, or account security action required
 
 **26. Other**
 - Does not fit above categories
@@ -354,6 +372,25 @@ You must detect and flag these edge cases:
 
 ---
 
+## QUICK DISAMBIGUATION TABLE (apply these FIRST before anything else)
+
+| Situation | Correct Category |
+|---|---|
+| Sender domain is @linkedin.com or @e.linkedin.com | LinkedIn Notification |
+| Sender domain is @indeed.com, @jobleads.com, @ziprecruiter.com, @lensa.com, @dice.com, @monster.com | Job Alert |
+| Sender domain is @google.com, @accounts.google.com AND about Gmail account | Gmail Notification |
+| Email contains retail deal / discount / sale ("50% off", "save $X", "snag a deal") | Other |
+| Email is a job offer WITH employment language (offer letter, salary, start date) | Offer |
+| Email contains verification code / password reset link | Account Recovery |
+| Personal recruiter directly asking for availability — NO confirmed time | Interview Request |
+| Automated job posting notification from job board | Job Alert |
+
+**GOLDEN RULE**: When in doubt, ask "Is this from a person at a real company, directly about THIS candidate?"
+- Yes → likely Interview Request / Interview Schedule / Offer
+- No → likely Job Alert / LinkedIn Notification / Other
+
+---
+
 ## OUTPUT FORMAT
 
 Return ONLY valid JSON. The response must include:
@@ -435,6 +472,7 @@ def call_claude_api(
     max_tokens: int = 800,
     temperature: float = 0.0,
     max_retries: int = 3,
+    timeout: float = 60.0,
 ) -> Dict[str, Any]:
     """
     Call OpenAI API with the classification prompt.
@@ -453,6 +491,7 @@ def call_claude_api(
         max_tokens: Maximum tokens in response
         temperature: Temperature for generation (0.0 for deterministic)
         max_retries: Maximum number of attempts (default 3)
+        timeout: Per-call HTTP timeout in seconds (default 60)
 
     Returns:
         Dict with keys: response (str), usage (dict: input_tokens, output_tokens)
@@ -477,7 +516,7 @@ def call_claude_api(
     # Retryable HTTP status codes
     RETRYABLE_STATUS = {500, 502, 503, 529}
 
-    client = openai.OpenAI(api_key=api_key)
+    client = openai.OpenAI(api_key=api_key, timeout=timeout)
 
     for attempt in range(1, max_retries + 1):
         try:

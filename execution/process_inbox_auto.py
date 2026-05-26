@@ -28,7 +28,7 @@ import logging
 import os
 import sys
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
@@ -442,6 +442,19 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
     output_dir = Path(f"tmp/auto_process_{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Default stats — updated as the run progresses.
+    # Defined before the try block so the finally clause can always log a
+    # ProcessRun even when the run crashes mid-flight.
+    stats: Dict[str, Any] = {
+        "timestamp": timestamp,
+        "total_emails": 0,
+        "interview_requests": 0,
+        "organized": 0,
+        "spam_deleted": 0,
+        "categories": {},
+    }
+    _run_logged = False  # set True once _log_process_run succeeds
+
     logger.info("=" * 60)
     logger.info("AUTOMATED INBOX PROCESSING")
     logger.info("=" * 60)
@@ -512,15 +525,8 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                 "aborted_reason": f"cost_guardrail: estimated ${estimated_cost:.2f} > limit ${_MAX_COST_PER_RUN_USD}",
             }
 
-        # Process emails
-        stats = {
-            "timestamp": timestamp,
-            "total_emails": len(emails),
-            "interview_requests": 0,
-            "organized": 0,
-            "spam_deleted": 0,
-            "categories": {}
-        }
+        # Process emails — update the pre-initialized stats dict
+        stats["total_emails"] = len(emails)
 
         interview_requests = []
         spam_email_ids = []
@@ -566,12 +572,32 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
         def _classify_one(args: Tuple[int, Dict]) -> Tuple[int, Dict, Optional[Dict], Dict]:
             """Classify a single email.
 
+            Applies deterministic sender-domain rules first (pre_classify_by_sender).
+            Falls back to AI classification only when no rule matches.
+
             Returns (idx, email_data, classification|None, gpt_usage).
             gpt_usage = {"input_tokens": int, "output_tokens": int}
             """
             idx, email_data = args
             _zero_usage: Dict = {"input_tokens": 0, "output_tokens": 0}
             try:
+                # Fast deterministic pre-classifier — skips AI for obvious cases
+                pre_category = pre_classify_by_sender(email_data)
+                if pre_category:
+                    logger.info(
+                        f"[{idx}] Pre-classified as '{pre_category}' "
+                        f"(rule-based, no AI call) — {email_data.get('subject','')[:50]}"
+                    )
+                    classification = {
+                        "category": pre_category,
+                        "confidence": 0.99,
+                        "requires_manual_review": False,
+                        "reasoning": "Deterministic sender-domain rule applied.",
+                        "edge_case": {"is_edge_case": False, "type": None, "confidence": 1.0, "reasoning": ""},
+                        "extracted_data": {},
+                    }
+                    return (idx, email_data, classification, _zero_usage)
+
                 classification = classify_email(email_data, validate_only=False)
                 # Pop internal usage metadata before passing classification downstream
                 usage = classification.pop("_gpt_usage", _zero_usage)
@@ -580,14 +606,36 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                 logger.error(f"Classification failed for email {idx}: {exc}")
                 return (idx, email_data, None, _zero_usage)
 
+        # Per-email timeout: 60s API call × up to 3 retries + backoff ≈ 3 min worst case.
+        # Batch timeout gives every email at least 3 min plus a buffer for 16 parallel workers.
+        _BATCH_TIMEOUT_S = max(180, len(emails) * 4)  # at least 3 min, ~4s/email overhead
+
         classified: List[Tuple[int, Dict, Optional[Dict], Dict]] = []
         with ThreadPoolExecutor(max_workers=16) as pool:
             futures = {
                 pool.submit(_classify_one, (idx, email_data)): idx
                 for idx, email_data in enumerate(emails, 1)
             }
-            for future in as_completed(futures):
-                classified.append(future.result())
+            try:
+                for future in as_completed(futures, timeout=_BATCH_TIMEOUT_S):
+                    classified.append(future.result())
+            except FuturesTimeoutError:
+                logger.error(
+                    f"Classification batch timed out after {_BATCH_TIMEOUT_S}s — "
+                    f"collecting {sum(1 for f in futures if f.done())}/{len(futures)} completed results"
+                )
+                _zero: Dict = {"input_tokens": 0, "output_tokens": 0}
+                for future, idx in futures.items():
+                    if future.done():
+                        try:
+                            classified.append(future.result())
+                        except Exception as exc:
+                            logger.error(f"Future {idx} failed: {exc}")
+                            # find the email_data for this idx
+                            email_data_for_idx = next(
+                                (e for i, e in enumerate(emails, 1) if i == idx), {}
+                            )
+                            classified.append((idx, email_data_for_idx, None, _zero))
 
         # Sort back into original order so logs are readable
         classified.sort(key=lambda x: x[0])
@@ -826,6 +874,7 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
 
         # Log this run to the dashboard ProcessRun table
         _log_process_run(stats, summary_file)
+        _run_logged = True
 
         return stats
 
@@ -834,14 +883,21 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
         raise
 
     finally:
+        # Always write a ProcessRun when emails were fetched but the run crashed
+        # before _log_process_run() completed, so the dashboard never shows 0
+        # for a run that actually touched emails.
+        if not _run_logged and stats.get("total_emails", 0) > 0:
+            stats["duration_seconds"] = (datetime.now() - start_time).total_seconds()
+            _log_process_run(stats, status="failed")
         # Clean up database session
         close_db_session()
 
 
-def _log_process_run(stats: Dict[str, Any], summary_file) -> None:
+def _log_process_run(stats: Dict[str, Any], summary_file=None, status: str = "success") -> None:
     """
     Write a ProcessRun record to the dashboard database so the UI shows
     the latest run stats and the countdown timer has a reference point.
+    Called on success AND in the finally block on crash (status="failed").
     """
     try:
         from sqlalchemy import create_engine
@@ -889,7 +945,7 @@ def _log_process_run(stats: Dict[str, Any], summary_file) -> None:
                 categories_breakdown=stats.get("categories", {}),
                 duration_seconds=stats.get("duration_seconds", 0),
                 gpt_cost_usd=gpt_usage.get("estimated_cost_usd", 0.0),
-                status="success",
+                status=status,
             )
             db.add(process_run)
             db.commit()
@@ -903,6 +959,63 @@ def _log_process_run(stats: Dict[str, Any], summary_file) -> None:
 
     except Exception as e:
         logger.warning(f"_log_process_run failed: {e}")
+
+
+def pre_classify_by_sender(email_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Apply deterministic sender-domain rules BEFORE the AI classification call.
+
+    Returns a category string if a confident rule matches, or None to let the
+    AI decide. This eliminates the most common misclassifications (retail promos
+    landing in Offer, job-board alerts landing in Gmail Notification, etc.)
+    without any API cost.
+    """
+    from_addr = (email_data.get("from") or "").lower()
+    subject   = (email_data.get("subject") or "").lower()
+    body      = (email_data.get("body") or "").lower()[:500]
+
+    # ── LinkedIn ────────────────────────────────────────────────────────────
+    if "@linkedin.com" in from_addr or "@e.linkedin.com" in from_addr:
+        return "LinkedIn Notification"
+
+    # ── Job boards — always Job Alert ───────────────────────────────────────
+    JOB_BOARD_DOMAINS = [
+        "@indeed.com", "@jobleads.com", "@ziprecruiter.com", "@glassdoor.com",
+        "@monster.com", "@dice.com", "@careerbuilder.com", "@simplyhired.com",
+        "@lensa.com", "@snagajob.com", "@flexjobs.com", "@getwork.com",
+    ]
+    if any(d in from_addr for d in JOB_BOARD_DOMAINS):
+        return "Job Alert"
+
+    # ── Gmail/Google system notifications ───────────────────────────────────
+    GOOGLE_SYSTEM_DOMAINS = ["@google.com", "@accounts.google.com", "@googlemail.com"]
+    GMAIL_SUBJECT_KEYWORDS = [
+        "gmail", "google account", "sign-in attempt", "new sign-in",
+        "forwarding confirmation", "storage", "security alert",
+    ]
+    if any(d in from_addr for d in GOOGLE_SYSTEM_DOMAINS):
+        if any(kw in subject or kw in body for kw in GMAIL_SUBJECT_KEYWORDS):
+            return "Gmail Notification"
+
+    # ── Account Recovery — only actual reset/verification emails ────────────
+    RECOVERY_KEYWORDS = [
+        "reset your password", "password reset", "your verification code",
+        "verification code is", "account recovery", "confirm your email",
+        "verify your account", "one-time code", "otp:", "security code",
+    ]
+    if any(kw in subject or kw in body for kw in RECOVERY_KEYWORDS):
+        return "Account Recovery"
+
+    # ── Retail / promotional — never Offer ──────────────────────────────────
+    RETAIL_SIGNALS = [
+        "% off", "save $", "snag a deal", "free shipping", "shop now",
+        "limited time offer", "sale ends", "discount code", "promo code",
+        "clearance", "buy now", "best deals", "today only",
+    ]
+    if any(sig in subject or sig in body for sig in RETAIL_SIGNALS):
+        return "Other"
+
+    return None  # Let AI decide
 
 
 def is_genuine_interview_request(classification: Dict[str, Any]) -> bool:
