@@ -970,9 +970,11 @@ def pre_classify_by_sender(email_data: Dict[str, Any]) -> Optional[str]:
     landing in Offer, job-board alerts landing in Gmail Notification, etc.)
     without any API cost.
     """
-    from_addr = (email_data.get("from") or "").lower()
+    # Support both key naming conventions: fetch_emails uses "sender_email"/"body_content",
+    # older callers may use "from"/"body". Check both to be safe.
+    from_addr = (email_data.get("sender_email") or email_data.get("from") or "").lower()
     subject   = (email_data.get("subject") or "").lower()
-    body      = (email_data.get("body") or "").lower()[:500]
+    body      = (email_data.get("body_content") or email_data.get("body") or "").lower()[:500]
 
     # ── LinkedIn ────────────────────────────────────────────────────────────
     if "@linkedin.com" in from_addr or "@e.linkedin.com" in from_addr:
@@ -987,7 +989,16 @@ def pre_classify_by_sender(email_data: Dict[str, Any]) -> Optional[str]:
     if any(d in from_addr for d in JOB_BOARD_DOMAINS):
         return "Job Alert"
 
+    # ── Social media / entertainment notifications — never interview-related ─
+    SOCIAL_DOMAINS = [
+        "@tiktok.com", "@facebookmail.com", "@instagram.com", "@twitter.com",
+        "@x.com", "@youtube.com", "@snapchat.com", "@pinterest.com",
+    ]
+    if any(d in from_addr for d in SOCIAL_DOMAINS):
+        return "Other"
+
     # ── Gmail/Google system notifications ───────────────────────────────────
+    # STRICT: sender MUST be from an official Google domain for Gmail Notification.
     GOOGLE_SYSTEM_DOMAINS = ["@google.com", "@accounts.google.com", "@googlemail.com"]
     GMAIL_SUBJECT_KEYWORDS = [
         "gmail", "google account", "sign-in attempt", "new sign-in",
@@ -1006,11 +1017,12 @@ def pre_classify_by_sender(email_data: Dict[str, Any]) -> Optional[str]:
     if any(kw in subject or kw in body for kw in RECOVERY_KEYWORDS):
         return "Account Recovery"
 
-    # ── Retail / promotional — never Offer ──────────────────────────────────
+    # ── Retail / promotional — never Offer or Interview category ────────────
     RETAIL_SIGNALS = [
         "% off", "save $", "snag a deal", "free shipping", "shop now",
         "limited time offer", "sale ends", "discount code", "promo code",
-        "clearance", "buy now", "best deals", "today only",
+        "clearance", "buy now", "best deals", "today only", "cashback",
+        "shop the", "gear for", "apparel", "bike gear", "summit club",
     ]
     if any(sig in subject or sig in body for sig in RETAIL_SIGNALS):
         return "Other"
