@@ -86,6 +86,20 @@ def run_email_processing(db: Session, triggered_by: str = "manual") -> Dict[str,
     Raises:
         Exception: If the processing script fails
     """
+    # In production (Render), the processing script is not bundled in the Docker image.
+    # It runs locally on the user's machine via Windows Task Scheduler.
+    if os.environ.get("ENVIRONMENT") == "production":
+        return {
+            "status": "unavailable",
+            "message": (
+                "Manual run is not available in the cloud deployment. "
+                "The processing script runs automatically on your local machine "
+                "via Windows Task Scheduler every 2 hours. "
+                "To trigger it manually, run: python execution/process_inbox_auto.py"
+            ),
+            "triggered_by": triggered_by,
+        }
+
     # Find the project root
     # From services/dashboard/api/integration, go up 4 levels to ClaudeTest
     current_file = Path(__file__)

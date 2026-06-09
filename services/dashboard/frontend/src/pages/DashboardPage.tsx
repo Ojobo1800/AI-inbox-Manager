@@ -43,6 +43,11 @@ const DashboardPage = () => {
         setTimeout(() => setRunResult(null), 8000);
         return;
       }
+      if (data?.status === 'unavailable') {
+        setRunResult({ status: 'unavailable', message: 'Run Now is local-only. Trigger manually on your machine.' });
+        setTimeout(() => setRunResult(null), 10000);
+        return;
+      }
       const count = data?.summary?.total_emails ?? data?.total_emails ?? 0;
       setRunResult({ status: 'success', message: `Done — ${count} emails processed.` });
       // Refresh all dashboard data
@@ -196,6 +201,8 @@ const DashboardPage = () => {
             <span className={`text-xs font-medium px-2 py-1 rounded ${
               runResult.status === 'success'
                 ? 'bg-green-100 text-green-800'
+                : runResult.status === 'unavailable'
+                ? 'bg-yellow-100 text-yellow-800'
                 : 'bg-red-100 text-red-800'
             }`}>
               {runResult.message}
