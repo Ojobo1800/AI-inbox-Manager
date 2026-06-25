@@ -361,6 +361,36 @@ async def get_offers(
     return result
 
 
+@router.get("/today-emails")
+async def get_today_emails(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """Return all emails processed today (Central Time), most recent first."""
+    today_start = _today_start_utc()
+    rows = (
+        db.query(Email, Classification)
+        .join(Classification, Email.id == Classification.email_id)
+        .filter(Email.fetch_timestamp >= today_start)
+        .order_by(Email.fetch_timestamp.desc())
+        .all()
+    )
+    result = []
+    for email, cls in rows:
+        result.append({
+            "id": email.id,
+            "subject": email.subject,
+            "from_address": email.from_address,
+            "received_date": email.received_date.isoformat() + "Z" if email.received_date else None,
+            "fetch_timestamp": email.fetch_timestamp.isoformat() + "Z" if email.fetch_timestamp else None,
+            "category": cls.category,
+            "company_name": cls.company_name,
+            "confidence": cls.confidence,
+            "current_folder": email.current_folder,
+        })
+    return result
+
+
 @router.get("/trends")
 async def get_trends(
     days: int = Query(30, ge=1, le=90, description="Number of days to analyze"),

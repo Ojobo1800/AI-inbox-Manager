@@ -57,6 +57,7 @@ const DashboardPage = () => {
       queryClient.invalidateQueries({ queryKey: ['trends'] });
       queryClient.invalidateQueries({ queryKey: ['recentInterviews'] });
       queryClient.invalidateQueries({ queryKey: ['offers'] });
+      queryClient.invalidateQueries({ queryKey: ['todayEmails'] });
       queryClient.invalidateQueries({ queryKey: ['inboxCount'] });
       queryClient.invalidateQueries({ queryKey: ['engineeringKPIs'] });
       setTimeout(() => setRunResult(null), 8000);
@@ -125,6 +126,14 @@ const DashboardPage = () => {
     queryFn: () => apiClient.getOffers(100),
     staleTime: 0,
     refetchOnMount: 'always',
+  });
+
+  const { data: todayEmails } = useQuery({
+    queryKey: ['todayEmails'],
+    queryFn: () => apiClient.getTodayEmails(),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchInterval: 5 * 60 * 1000,
   });
 
   const todayCST = format(toZonedTime(new Date(), 'America/Chicago'), 'yyyy-MM-dd');
@@ -596,55 +605,54 @@ const DashboardPage = () => {
         </div>
       )}
 
-      {/* Offers Received Today */}
+      {/* Emails Processed Today */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="bg-gray-200 px-6 py-3 flex items-center justify-between">
-          <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Offers Received Today</h2>
+          <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Emails Processed Today</h2>
         </div>
         <div className="px-4 py-5 sm:p-6">
-          {todayOffers.length > 0 ? (
+          {todayEmails && todayEmails.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Received</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Company</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Position</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Time (CST)</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Subject</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">From</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Confidence</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Category</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Company</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Folder</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {todayOffers.map((offer: any, idx: number) => (
-                    <tr key={offer.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="px-3 py-2 whitespace-nowrap text-gray-700">
-                        {offer.received_date
-                          ? new Date(offer.received_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                          : '—'}
+                  {todayEmails.map((email: any, idx: number) => (
+                    <tr key={email.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-3 py-2 whitespace-nowrap text-gray-700 text-xs">
+                        {email.fetch_timestamp ? formatDateCST(email.fetch_timestamp) : '—'}
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">{offer.company_name || '—'}</td>
-                      <td className="px-3 py-2 text-gray-700 max-w-[160px] truncate" title={offer.position || ''}>{offer.position || '—'}</td>
-                      <td className="px-3 py-2 text-gray-700 max-w-[200px] truncate" title={offer.subject || ''}>{offer.subject || '—'}</td>
-                      <td className="px-3 py-2 text-gray-600 max-w-[180px] truncate" title={offer.from_address || ''}>{offer.from_address || '—'}</td>
+                      <td className="px-3 py-2 text-gray-900 max-w-[220px] truncate" title={email.subject || ''}>{email.subject || '—'}</td>
+                      <td className="px-3 py-2 text-gray-600 max-w-[180px] truncate" title={email.from_address || ''}>{email.from_address || '—'}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
-                        {offer.confidence != null ? (
-                          <span className={`px-2 py-0.5 text-xs font-medium rounded ${
-                            offer.confidence >= 0.9 ? 'bg-green-100 text-green-800' :
-                            offer.confidence >= 0.7 ? 'bg-yellow-100 text-yellow-800' :
-                            'bg-gray-100 text-gray-700'
-                          }`}>
-                            {Math.round(offer.confidence * 100)}%
-                          </span>
-                        ) : '—'}
+                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                          email.category === 'Interview Request' ? 'bg-blue-100 text-blue-800' :
+                          email.category === 'Offer' ? 'bg-green-100 text-green-800' :
+                          email.category === 'Rejection' ? 'bg-red-100 text-red-800' :
+                          email.category === 'Interview Schedule' ? 'bg-orange-100 text-orange-800' :
+                          email.category === 'Interview Confirmation' ? 'bg-purple-100 text-purple-800' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {email.category || '—'}
+                        </span>
                       </td>
+                      <td className="px-3 py-2 text-gray-700 max-w-[140px] truncate" title={email.company_name || ''}>{email.company_name || '—'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap text-gray-500 text-xs">{email.current_folder || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           ) : (
-            <p className="text-sm text-gray-500 text-center py-8">No offers received today</p>
+            <p className="text-sm text-gray-500 text-center py-8">No emails processed today</p>
           )}
         </div>
       </div>

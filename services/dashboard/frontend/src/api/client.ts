@@ -374,6 +374,11 @@ class ApiClient {
     return response.data;
   }
 
+  async getTodayEmails(): Promise<any[]> {
+    const response = await this.client.get('/api/stats/today-emails');
+    return response.data;
+  }
+
   async getInterviewPipeline(): Promise<any> {
     const response = await this.client.get('/api/stats/pipeline');
     return response.data;
