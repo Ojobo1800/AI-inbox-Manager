@@ -122,10 +122,15 @@ const DashboardPage = () => {
 
   const { data: offers } = useQuery({
     queryKey: ['offers'],
-    queryFn: () => apiClient.getOffers(20),
+    queryFn: () => apiClient.getOffers(100),
     staleTime: 0,
     refetchOnMount: 'always',
   });
+
+  const todayCST = format(toZonedTime(new Date(), 'America/Chicago'), 'yyyy-MM-dd');
+  const todayOffers = (offers ?? []).filter((offer: any) =>
+    offer.received_date && offer.received_date.slice(0, 10) === todayCST
+  );
 
   const { data: engKPIs } = useQuery({
     queryKey: ['engineeringKPIs'],
@@ -275,26 +280,26 @@ const DashboardPage = () => {
           </div>
         </Link>
 
-        {/* Pending Approvals */}
-        <Link to="/review" className="bg-gray-200 overflow-hidden shadow rounded-lg hover:shadow-lg transition-shadow">
+        {/* Offers Received Today */}
+        <div className="bg-gray-200 overflow-hidden shadow rounded-lg">
           <div className="p-5">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="text-3xl font-bold text-orange-600">
-                  {stats?.pending_approvals || 0}
+                <div className="text-3xl font-bold text-green-600">
+                  {todayOffers.length}
                 </div>
               </div>
               <div className="ml-5 w-0 flex-1">
                 <dl>
                   <dt className="text-sm font-bold text-gray-800 truncate">
-                    Pending Approvals
+                    Offers Received
                   </dt>
-                  <dd className="mt-1 text-xs text-primary-600">Click to review</dd>
+                  <dd className="mt-1 text-xs text-gray-500">Today</dd>
                 </dl>
               </div>
             </div>
           </div>
-        </Link>
+        </div>
 
         {/* This Week */}
         <div className="bg-gray-200 overflow-hidden shadow rounded-lg">
@@ -591,13 +596,13 @@ const DashboardPage = () => {
         </div>
       )}
 
-      {/* Offers Received */}
+      {/* Offers Received Today */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="bg-gray-200 px-6 py-3 flex items-center justify-between">
-          <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Offers Received</h2>
+          <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Offers Received Today</h2>
         </div>
         <div className="px-4 py-5 sm:p-6">
-          {offers && offers.length > 0 ? (
+          {todayOffers.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead>
@@ -611,7 +616,7 @@ const DashboardPage = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {offers.map((offer: any, idx: number) => (
+                  {todayOffers.map((offer: any, idx: number) => (
                     <tr key={offer.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       <td className="px-3 py-2 whitespace-nowrap text-gray-700">
                         {offer.received_date
@@ -639,7 +644,7 @@ const DashboardPage = () => {
               </table>
             </div>
           ) : (
-            <p className="text-sm text-gray-500 text-center py-8">No offers received yet</p>
+            <p className="text-sm text-gray-500 text-center py-8">No offers received today</p>
           )}
         </div>
       </div>
