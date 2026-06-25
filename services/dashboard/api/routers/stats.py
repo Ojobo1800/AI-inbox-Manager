@@ -366,15 +366,33 @@ async def get_today_emails(
     db: Session = Depends(get_db),
     user: UserSession = Depends(get_current_user)
 ):
-    """Return all emails processed today (Central Time), most recent first."""
+    """Return all emails classified today (Central Time), most recent first.
+
+    Uses classification_timestamp (not fetch_timestamp) so re-processed emails
+    are included even if they were first fetched on a previous day.
+    Deduplicates to the latest classification per email.
+    """
     today_start = _today_start_utc()
+
+    # Subquery: latest classification id per email classified today
+    subq = (
+        db.query(
+            Classification.email_id,
+            func.max(Classification.id).label("max_cls_id")
+        )
+        .filter(Classification.classification_timestamp >= today_start)
+        .group_by(Classification.email_id)
+        .subquery()
+    )
+
     rows = (
         db.query(Email, Classification)
-        .join(Classification, Email.id == Classification.email_id)
-        .filter(Email.fetch_timestamp >= today_start)
-        .order_by(Email.fetch_timestamp.desc())
+        .join(subq, Email.id == subq.c.email_id)
+        .join(Classification, Classification.id == subq.c.max_cls_id)
+        .order_by(Classification.classification_timestamp.desc())
         .all()
     )
+
     result = []
     for email, cls in rows:
         result.append({
@@ -382,7 +400,7 @@ async def get_today_emails(
             "subject": email.subject,
             "from_address": email.from_address,
             "received_date": email.received_date.isoformat() + "Z" if email.received_date else None,
-            "fetch_timestamp": email.fetch_timestamp.isoformat() + "Z" if email.fetch_timestamp else None,
+            "fetch_timestamp": cls.classification_timestamp.isoformat() + "Z" if cls.classification_timestamp else None,
             "category": cls.category,
             "company_name": cls.company_name,
             "confidence": cls.confidence,
