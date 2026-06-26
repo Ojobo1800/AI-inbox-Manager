@@ -653,7 +653,8 @@ const DashboardPage = () => {
         </div>
       )}
 
-      {/* Upcoming Interviews This Week */}
+      {/* Upcoming Interviews This Week — hidden when empty */}
+      {(upcomingLoading || (upcomingInterviews && upcomingInterviews.length > 0)) && (
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="bg-gray-200 px-6 py-3 text-center">
           <h2 className="text-base font-bold text-gray-800">Upcoming Interviews This Week</h2>
@@ -716,6 +717,7 @@ const DashboardPage = () => {
           )}
         </div>
       </div>
+      )}
 
       {/* Students Not Yet Notified */}
       {(missedLoading || (missedNotifications && missedNotifications.length > 0)) && (
