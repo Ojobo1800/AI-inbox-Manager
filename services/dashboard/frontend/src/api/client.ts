@@ -379,6 +379,16 @@ class ApiClient {
     return response.data;
   }
 
+  async getHourlyVolume(): Promise<{ hour: number; count: number }[]> {
+    const response = await this.client.get('/api/stats/hourly-volume');
+    return response.data;
+  }
+
+  async getRejectionTrend(): Promise<{ date: string; count: number }[]> {
+    const response = await this.client.get('/api/stats/rejection-trend');
+    return response.data;
+  }
+
   async getInterviewPipeline(): Promise<any> {
     const response = await this.client.get('/api/stats/pipeline');
     return response.data;

@@ -4,10 +4,14 @@ import { Link } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import { format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import CountdownTimer from '../components/CountdownTimer';
 import InterviewChecklist from '../components/InterviewChecklist';
 import type { InterviewRequest } from '../types';
+
+const Skel = ({ w = 'w-16', h = 'h-8' }: { w?: string; h?: string }) => (
+  <div className={`animate-pulse bg-gray-300 rounded ${w} ${h}`} />
+);
 
 const TYPE_STYLES: Record<string, string> = {
   'interview_request': 'bg-blue-100 text-blue-800',
@@ -78,7 +82,7 @@ const DashboardPage = () => {
   };
 
   // Stats and config queries
-  const { data: stats, isLoading } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['summaryStats'],
     queryFn: () => apiClient.getSummaryStats(),
     staleTime: 0,
@@ -86,7 +90,7 @@ const DashboardPage = () => {
     refetchInterval: 5 * 60 * 1000,
   });
 
-  const { data: runs } = useQuery({
+  const { data: runs, isLoading: runsLoading } = useQuery({
     queryKey: ['processingRuns'],
     queryFn: () => apiClient.getProcessingRuns(5),
     staleTime: 0,
@@ -95,7 +99,7 @@ const DashboardPage = () => {
   });
 
   // Recent interviews (limit to 5)
-  const { data: interviews } = useQuery({
+  const { data: interviews, isLoading: interviewsLoading } = useQuery({
     queryKey: ['recentInterviews'],
     queryFn: () => apiClient.getInterviewRequests(5, 0),
     staleTime: 0,
@@ -128,7 +132,7 @@ const DashboardPage = () => {
     refetchOnMount: 'always',
   });
 
-  const { data: todayEmails } = useQuery({
+  const { data: todayEmails, isLoading: todayEmailsLoading } = useQuery({
     queryKey: ['todayEmails'],
     queryFn: () => apiClient.getTodayEmails(),
     staleTime: 0,
@@ -136,10 +140,31 @@ const DashboardPage = () => {
     refetchInterval: 5 * 60 * 1000,
   });
 
+
+
   const todayCST = format(toZonedTime(new Date(), 'America/Chicago'), 'yyyy-MM-dd');
   const todayOffers = (offers ?? []).filter((offer: any) =>
     offer.received_date && offer.received_date.slice(0, 10) === todayCST
   );
+
+  // Trend arrow: today vs yesterday
+  const todayCount = stats?.today_total_emails ?? 0;
+  const yesterdayCount = stats?.yesterday_total_emails ?? 0;
+  const emailTrendPct = yesterdayCount > 0
+    ? Math.round(((todayCount - yesterdayCount) / yesterdayCount) * 100)
+    : null;
+
+  // Offers progress bar (monthly goal = 10)
+  const OFFER_GOAL = 10;
+  const currentMonthOffers = (offers ?? []).filter((o: any) => {
+    if (!o.received_date) return false;
+    const d = new Date(o.received_date);
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }).length;
+
+  // Sparkline data for This Week card
+  const sparklineData = (trends?.trends ?? []).slice(-7).map((d: any) => ({ v: d.total_emails }));
 
   const { data: engKPIs } = useQuery({
     queryKey: ['engineeringKPIs'],
@@ -172,14 +197,6 @@ const DashboardPage = () => {
     if (!interviewType) return 'N/A';
     return TYPE_LABELS[interviewType] || interviewType;
   };
-
-  if (isLoading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
@@ -235,14 +252,19 @@ const DashboardPage = () => {
               <div className="flex items-center">
                 <div className="flex-shrink-0">
                   <div className="text-3xl font-bold text-primary-600">
-                    {stats?.today_total_emails || 0}
+                    {statsLoading ? <Skel /> : stats?.today_total_emails || 0}
                   </div>
                 </div>
                 <div className="ml-5 w-0 flex-1">
                   <dl>
                     <dt className="text-sm font-bold text-gray-800 truncate">Emails Today</dt>
-                    {sheetUrl && (
-                      <dd className="mt-1">
+                    <dd className="mt-1 flex items-center gap-2">
+                      {emailTrendPct !== null && (
+                        <span className={`inline-flex items-center gap-0.5 text-xs font-semibold ${emailTrendPct >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                          {emailTrendPct >= 0 ? '↑' : '↓'}{Math.abs(emailTrendPct)}% vs yesterday
+                        </span>
+                      )}
+                      {sheetUrl && (
                         <span className="inline-flex items-center gap-1 text-xs text-primary-600 font-medium">
                           View in Google Sheets
                           <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -250,8 +272,8 @@ const DashboardPage = () => {
                               d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                           </svg>
                         </span>
-                      </dd>
-                    )}
+                      )}
+                    </dd>
                   </dl>
                 </div>
               </div>
@@ -274,7 +296,7 @@ const DashboardPage = () => {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <div className="text-3xl font-bold text-green-600">
-                  {stats?.total_interview_requests || 0}
+                  {statsLoading ? <Skel /> : stats?.total_interview_requests || 0}
                 </div>
               </div>
               <div className="ml-5 w-0 flex-1">
@@ -295,16 +317,22 @@ const DashboardPage = () => {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <div className="text-3xl font-bold text-green-600">
-                  {todayOffers.length}
+                  {statsLoading ? <Skel /> : todayOffers.length}
                 </div>
               </div>
               <div className="ml-5 w-0 flex-1">
                 <dl>
-                  <dt className="text-sm font-bold text-gray-800 truncate">
-                    Offers Received
-                  </dt>
-                  <dd className="mt-1 text-xs text-gray-500">Today</dd>
+                  <dt className="text-sm font-bold text-gray-800 truncate">Offers Received</dt>
+                  <dd className="mt-1 text-xs text-gray-500">{currentMonthOffers}/{OFFER_GOAL} this month</dd>
                 </dl>
+              </div>
+            </div>
+            <div className="mt-2">
+              <div className="w-full bg-gray-300 rounded-full h-1.5">
+                <div
+                  className="bg-green-500 h-1.5 rounded-full transition-all"
+                  style={{ width: `${Math.min((currentMonthOffers / OFFER_GOAL) * 100, 100)}%` }}
+                />
               </div>
             </div>
           </div>
@@ -313,19 +341,24 @@ const DashboardPage = () => {
         {/* This Week */}
         <div className="bg-gray-200 overflow-hidden shadow rounded-lg">
           <div className="p-5">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <div className="text-3xl font-bold text-gray-600">
-                  {stats?.week_total_emails || 0}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <div className="flex-shrink-0">
+                  <div className="text-3xl font-bold text-gray-600">
+                    {statsLoading ? <Skel /> : stats?.week_total_emails || 0}
+                  </div>
+                </div>
+                <div className="ml-4">
+                  <dt className="text-sm font-bold text-gray-800">This Week</dt>
                 </div>
               </div>
-              <div className="ml-5 w-0 flex-1">
-                <dl>
-                  <dt className="text-sm font-bold text-gray-800 truncate">
-                    This Week
-                  </dt>
-                </dl>
-              </div>
+              {sparklineData.length > 1 && (
+                <ResponsiveContainer width={70} height={36}>
+                  <LineChart data={sparklineData}>
+                    <Line type="monotone" dataKey="v" stroke="#6b7280" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
         </div>
@@ -337,7 +370,7 @@ const DashboardPage = () => {
               <div className="flex items-center">
                 <div className="flex-shrink-0">
                   <div className="text-3xl font-bold text-blue-600">
-                    {inboxCount?.count ?? stats?.inbox_count ?? 0}
+                    {statsLoading ? <Skel /> : inboxCount?.count ?? stats?.inbox_count ?? 0}
                   </div>
                 </div>
                 <div className="ml-4">
@@ -402,14 +435,14 @@ const DashboardPage = () => {
       </Link>
 
       {/* Engineering KPIs */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-4">
         {/* AI Cost Today */}
         <div className="bg-gray-200 overflow-hidden shadow rounded-lg">
           <div className="p-5">
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <div className="text-3xl font-bold text-emerald-600">
-                  ${engKPIs?.ai_cost_today_usd?.toFixed(4) ?? '—'}
+                  {engKPIs == null ? <Skel /> : `$${engKPIs.ai_cost_today_usd.toFixed(4)}`}
                 </div>
               </div>
               <div className="ml-5 w-0 flex-1">
@@ -428,9 +461,7 @@ const DashboardPage = () => {
             <div className="flex items-center">
               <div className="flex-shrink-0">
                 <div className="text-3xl font-bold text-blue-600">
-                  {engKPIs?.avg_duration_seconds_7d != null
-                    ? `${engKPIs.avg_duration_seconds_7d}s`
-                    : '—'}
+                  {engKPIs == null ? <Skel /> : engKPIs.avg_duration_seconds_7d != null ? `${engKPIs.avg_duration_seconds_7d}s` : '—'}
                 </div>
               </div>
               <div className="ml-5 w-0 flex-1">
@@ -611,7 +642,11 @@ const DashboardPage = () => {
           <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Emails Processed Today</h2>
         </div>
         <div className="px-4 py-5 sm:p-6">
-          {todayEmails && todayEmails.length > 0 ? (
+          {todayEmailsLoading ? (
+            <div className="space-y-2 py-4">
+              {[...Array(4)].map((_, i) => <Skel key={i} w="w-full" h="h-6" />)}
+            </div>
+          ) : todayEmails && todayEmails.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead>
@@ -671,7 +706,11 @@ const DashboardPage = () => {
             </Link>
           </div>
           <div className="px-4 py-5 sm:p-6">
-            {interviews && interviews.length > 0 ? (
+            {interviewsLoading ? (
+              <div className="space-y-2 py-4">
+                {[...Array(3)].map((_, i) => <Skel key={i} w="w-full" h="h-12" />)}
+              </div>
+            ) : interviews && interviews.length > 0 ? (
               <>
                 {/* Mini pie chart — type breakdown */}
                 {(() => {
@@ -801,7 +840,11 @@ const DashboardPage = () => {
             <h2 className="text-base font-bold text-gray-800">Recent Processing Runs</h2>
           </div>
           <div className="px-4 py-5 sm:p-6">
-            {runs && runs.length > 0 ? (
+            {runsLoading ? (
+              <div className="space-y-2 py-4">
+                {[...Array(3)].map((_, i) => <Skel key={i} w="w-full" h="h-8" />)}
+              </div>
+            ) : runs && runs.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200 text-sm">
                   <thead>

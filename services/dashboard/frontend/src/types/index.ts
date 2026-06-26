@@ -79,6 +79,7 @@ export interface SummaryStats {
   last_run_timestamp?: string;
   pending_approvals: number;
   inbox_count: number;
+  yesterday_total_emails?: number;
 }
 
 export interface ScheduleConfig {

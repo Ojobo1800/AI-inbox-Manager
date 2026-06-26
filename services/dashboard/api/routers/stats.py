@@ -41,6 +41,7 @@ class SummaryStats(BaseModel):
     last_run_timestamp: Optional[datetime]
     pending_approvals: int
     inbox_count: int
+    yesterday_total_emails: int = 0
 
 
 class CategoryBreakdown(BaseModel):
@@ -78,12 +79,19 @@ async def get_summary_stats(
     """
     now = datetime.utcnow()
     today_start = _today_start_utc()
+    yesterday_start = today_start - timedelta(days=1)
     week_ago = now - timedelta(days=7)
 
     # Aggregate today's stats from ProcessRun records (always populated by processing script)
     today_runs = db.query(ProcessRun).filter(
         ProcessRun.run_timestamp >= today_start
     ).all()
+
+    yesterday_runs = db.query(ProcessRun).filter(
+        ProcessRun.run_timestamp >= yesterday_start,
+        ProcessRun.run_timestamp < today_start
+    ).all()
+    yesterday_total = sum(r.total_emails for r in yesterday_runs)
 
     today_total = sum(r.total_emails for r in today_runs)
     today_organized = sum(r.organized for r in today_runs)
@@ -145,7 +153,8 @@ async def get_summary_stats(
         week_interview_requests=week_interview,
         last_run_timestamp=last_run.run_timestamp if last_run else None,
         pending_approvals=pending,
-        inbox_count=inbox_count
+        inbox_count=inbox_count,
+        yesterday_total_emails=yesterday_total,
     )
 
     return result
@@ -407,6 +416,42 @@ async def get_today_emails(
             "current_folder": email.current_folder,
         })
     return result
+
+
+@router.get("/hourly-volume")
+async def get_hourly_volume(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """Email volume by hour of day (last 30 days, Central Time)."""
+    since = datetime.utcnow() - timedelta(days=30)
+    rows = db.query(
+        func.extract('hour', Classification.classification_timestamp).label('hour'),
+        func.count(Classification.id).label('count')
+    ).filter(
+        Classification.classification_timestamp >= since
+    ).group_by('hour').order_by('hour').all()
+
+    hourly = {int(r.hour): r.count for r in rows}
+    return [{"hour": h, "count": hourly.get(h, 0)} for h in range(24)]
+
+
+@router.get("/rejection-trend")
+async def get_rejection_trend(
+    db: Session = Depends(get_db),
+    user: UserSession = Depends(get_current_user)
+):
+    """Daily rejection counts over last 30 days."""
+    since = datetime.utcnow() - timedelta(days=30)
+    rows = db.query(
+        func.date(Classification.classification_timestamp).label('date'),
+        func.count(Classification.id).label('count')
+    ).filter(
+        Classification.category == 'Rejection',
+        Classification.classification_timestamp >= since
+    ).group_by(func.date(Classification.classification_timestamp)).order_by('date').all()
+
+    return [{"date": str(r.date), "count": r.count} for r in rows]
 
 
 @router.get("/trends")
