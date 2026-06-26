@@ -62,6 +62,8 @@ const DashboardPage = () => {
       queryClient.invalidateQueries({ queryKey: ['recentInterviews'] });
       queryClient.invalidateQueries({ queryKey: ['offers'] });
       queryClient.invalidateQueries({ queryKey: ['todayEmails'] });
+      queryClient.invalidateQueries({ queryKey: ['upcomingInterviews'] });
+      queryClient.invalidateQueries({ queryKey: ['missedNotifications'] });
       queryClient.invalidateQueries({ queryKey: ['inboxCount'] });
       queryClient.invalidateQueries({ queryKey: ['engineeringKPIs'] });
       setTimeout(() => setRunResult(null), 8000);
@@ -138,6 +140,21 @@ const DashboardPage = () => {
     staleTime: 0,
     refetchOnMount: 'always',
     refetchInterval: 5 * 60 * 1000,
+  });
+
+  const { data: upcomingInterviews, isLoading: upcomingLoading } = useQuery({
+    queryKey: ['upcomingInterviews'],
+    queryFn: () => apiClient.getUpcomingInterviews(),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchInterval: 5 * 60 * 1000,
+  });
+
+  const { data: missedNotifications, isLoading: missedLoading } = useQuery({
+    queryKey: ['missedNotifications'],
+    queryFn: () => apiClient.getMissedInterviews(),
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
 
@@ -632,6 +649,125 @@ const DashboardPage = () => {
                 </Link>
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upcoming Interviews This Week */}
+      <div className="bg-white shadow rounded-lg overflow-hidden">
+        <div className="bg-gray-200 px-6 py-3 text-center">
+          <h2 className="text-base font-bold text-gray-800">Upcoming Interviews This Week</h2>
+        </div>
+        <div className="px-4 py-5 sm:p-6">
+          {upcomingLoading ? (
+            <div className="space-y-2 py-2">
+              {[...Array(3)].map((_, i) => <Skel key={i} w="w-full" h="h-8" />)}
+            </div>
+          ) : upcomingInterviews && upcomingInterviews.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Student</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Company</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Position</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Time</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Link</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {upcomingInterviews.map((iv, idx) => {
+                    const isToday = iv.interview_date === todayCST;
+                    const isTomorrow = iv.interview_date === format(toZonedTime(new Date(Date.now() + 86400000), 'America/Chicago'), 'yyyy-MM-dd');
+                    return (
+                      <tr key={iv.interview_event_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{iv.student_name || '—'}</td>
+                        <td className="px-3 py-2 text-gray-700 max-w-[160px] truncate">{iv.company_name || '—'}</td>
+                        <td className="px-3 py-2 text-gray-600 max-w-[160px] truncate">{iv.position || '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {iv.interview_date ? (
+                            <span className={`px-2 py-0.5 text-xs font-semibold rounded ${
+                              isToday ? 'bg-red-100 text-red-700' :
+                              isTomorrow ? 'bg-orange-100 text-orange-700' :
+                              'bg-blue-50 text-blue-700'
+                            }`}>
+                              {isToday ? 'Today' : isTomorrow ? 'Tomorrow' : new Date(iv.interview_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            </span>
+                          ) : '—'}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-700 text-xs">{iv.interview_time || '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-600 text-xs">{iv.interview_type ? TYPE_LABELS[iv.interview_type] || iv.interview_type : '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {iv.meeting_link ? (
+                            <a href={iv.meeting_link} target="_blank" rel="noopener noreferrer"
+                              className="text-xs text-primary-600 hover:underline font-medium">Join</a>
+                          ) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500 text-center py-8">No upcoming interviews scheduled</p>
+          )}
+        </div>
+      </div>
+
+      {/* Students Not Yet Notified */}
+      {(missedLoading || (missedNotifications && missedNotifications.length > 0)) && (
+        <div className="bg-white shadow rounded-lg overflow-hidden border-l-4 border-orange-400">
+          <div className="bg-orange-50 px-6 py-3 flex items-center gap-2">
+            <svg className="h-5 w-5 text-orange-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            <h2 className="text-base font-bold text-orange-800">
+              Students Not Yet Notified
+              {!missedLoading && missedNotifications && (
+                <span className="ml-2 px-2 py-0.5 bg-orange-200 text-orange-900 text-xs rounded-full">{missedNotifications.length}</span>
+              )}
+            </h2>
+          </div>
+          <div className="px-4 py-5 sm:p-6">
+            {missedLoading ? (
+              <div className="space-y-2 py-2">
+                {[...Array(3)].map((_, i) => <Skel key={i} w="w-full" h="h-8" />)}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200 text-sm">
+                  <thead>
+                    <tr className="bg-gray-50">
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Student</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Company</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Position</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Received</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(missedNotifications ?? []).map((item: any, idx: number) => (
+                      <tr key={item.email_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-orange-50'}>
+                        <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{item.student_name || '—'}</td>
+                        <td className="px-3 py-2 text-gray-700 max-w-[160px] truncate" title={item.company_name}>{item.company_name || '—'}</td>
+                        <td className="px-3 py-2 text-gray-600 max-w-[160px] truncate" title={item.position}>{item.position || '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">
+                          {item.received_date ? formatDateCST(item.received_date) : '—'}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span className="px-2 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-800">
+                            {item.notification_status === 'not_created' ? 'Not created' : item.notification_status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
