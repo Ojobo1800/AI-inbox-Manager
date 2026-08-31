@@ -634,7 +634,10 @@ def parse_classification_response(response_text: str) -> Dict[str, Any]:
         raise
 
 
-def apply_business_rules(classification: Dict[str, Any]) -> Dict[str, Any]:
+def apply_business_rules(
+    classification: Dict[str, Any],
+    email_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Apply business rules to classification result.
 
@@ -642,12 +645,48 @@ def apply_business_rules(classification: Dict[str, Any]) -> Dict[str, Any]:
 
     Args:
         classification: Raw classification result from Claude
+        email_data: Original email fields (used for sender-domain enforcement)
 
     Returns:
         Classification with business rules applied
     """
     # Make a copy to avoid mutating input
     result = classification.copy()
+
+    # ── Sender-domain enforcement (override AI hallucinations) ───────────────
+    # These rules are deterministic guards that correct the most common
+    # category leakage regardless of what the AI returned.
+    if email_data is not None:
+        from_addr = (
+            email_data.get("sender_email") or email_data.get("from") or ""
+        ).lower()
+
+        # "Gmail Notification" MUST come from an official Google domain.
+        # Any other sender that slips past the pre-classifier gets corrected here.
+        GOOGLE_DOMAINS = ["@google.com", "@accounts.google.com", "@googlemail.com"]
+        if result.get("category") == "Gmail Notification" and not any(
+            d in from_addr for d in GOOGLE_DOMAINS
+        ):
+            original = result["category"]
+            result["category"] = "Other"
+            result["requires_manual_review"] = True
+            logger.warning(
+                f"Domain override: '{original}' → 'Other' — sender '{from_addr}' "
+                f"is not a Google domain"
+            )
+
+        # "LinkedIn Notification" MUST come from LinkedIn.
+        LINKEDIN_DOMAINS = ["@linkedin.com", "@e.linkedin.com"]
+        if result.get("category") == "LinkedIn Notification" and not any(
+            d in from_addr for d in LINKEDIN_DOMAINS
+        ):
+            original = result["category"]
+            result["category"] = "Other"
+            result["requires_manual_review"] = True
+            logger.warning(
+                f"Domain override: '{original}' → 'Other' — sender '{from_addr}' "
+                f"is not a LinkedIn domain"
+            )
 
     # Rule 1: Low confidence requires manual review
     if result.get("confidence", 0) < 0.70:
@@ -740,8 +779,8 @@ def classify_email(
             "usage", {"input_tokens": 0, "output_tokens": 0}
         )
 
-    # Apply business rules
-    result = apply_business_rules(classification)
+    # Apply business rules (pass email_data for sender-domain enforcement)
+    result = apply_business_rules(classification, email_data=email_data)
 
     # Add metadata
     result["email_metadata"] = {

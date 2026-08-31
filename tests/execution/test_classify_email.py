@@ -217,6 +217,82 @@ class TestApplyBusinessRules:
         # But result should
         assert "processing_timestamp" in result
 
+    # ── Sender-domain enforcement tests ──────────────────────────────────────
+
+    def _base_classification(self, category: str) -> dict:
+        return {
+            "category": category,
+            "confidence": 0.95,
+            "requires_manual_review": False,
+            "reasoning": "AI decision",
+            "edge_case": {"is_edge_case": False, "type": None, "confidence": 1.0, "reasoning": ""},
+            "extracted_data": {},
+        }
+
+    def test_gmail_notification_non_google_sender_overridden(self):
+        """AI returning Gmail Notification for a non-Google sender must be corrected to Other."""
+        classification = self._base_classification("Gmail Notification")
+        email_data = {"sender_email": "noreply@indeed.com", "subject": "New jobs for you"}
+
+        result = apply_business_rules(classification, email_data=email_data)
+
+        assert result["category"] == "Other"
+        assert result["requires_manual_review"] is True
+
+    def test_gmail_notification_google_sender_kept(self):
+        """Gmail Notification from an official Google domain should not be overridden."""
+        classification = self._base_classification("Gmail Notification")
+        email_data = {"sender_email": "no-reply@accounts.google.com", "subject": "Security alert"}
+
+        result = apply_business_rules(classification, email_data=email_data)
+
+        assert result["category"] == "Gmail Notification"
+
+    def test_gmail_notification_google_com_sender_kept(self):
+        """Gmail Notification from @google.com should not be overridden."""
+        classification = self._base_classification("Gmail Notification")
+        email_data = {"sender_email": "noreply@google.com", "subject": "Gmail forwarding confirmation"}
+
+        result = apply_business_rules(classification, email_data=email_data)
+
+        assert result["category"] == "Gmail Notification"
+
+    def test_linkedin_notification_non_linkedin_sender_overridden(self):
+        """AI returning LinkedIn Notification for a non-LinkedIn sender must be corrected."""
+        classification = self._base_classification("LinkedIn Notification")
+        email_data = {"sender_email": "recruiter@ziprecruiter.com", "subject": "Job match for you"}
+
+        result = apply_business_rules(classification, email_data=email_data)
+
+        assert result["category"] == "Other"
+        assert result["requires_manual_review"] is True
+
+    def test_linkedin_notification_linkedin_sender_kept(self):
+        """LinkedIn Notification from @e.linkedin.com should not be overridden."""
+        classification = self._base_classification("LinkedIn Notification")
+        email_data = {"sender_email": "jobs-noreply@linkedin.com", "subject": "You have a new connection"}
+
+        result = apply_business_rules(classification, email_data=email_data)
+
+        assert result["category"] == "LinkedIn Notification"
+
+    def test_domain_override_uses_from_key_fallback(self):
+        """Domain override should fall back to 'from' key when sender_email is absent."""
+        classification = self._base_classification("Gmail Notification")
+        email_data = {"from": "promo@retailer.com", "subject": "Sale today"}
+
+        result = apply_business_rules(classification, email_data=email_data)
+
+        assert result["category"] == "Other"
+
+    def test_no_email_data_skips_domain_check(self):
+        """Without email_data, domain enforcement is skipped (backward compat)."""
+        classification = self._base_classification("Gmail Notification")
+
+        result = apply_business_rules(classification)  # no email_data
+
+        assert result["category"] == "Gmail Notification"
+
 
 class TestClassifyEmail:
     """Test main classification function."""
@@ -427,8 +503,8 @@ class TestApprovedCategories:
     """Test category constants."""
 
     def test_approved_categories_count(self):
-        """Test that we have exactly 14 approved categories."""
-        assert len(APPROVED_CATEGORIES) == 14
+        """Test that the approved-category list matches the documented taxonomy."""
+        assert len(APPROVED_CATEGORIES) == 25
 
     def test_approved_categories_no_duplicates(self):
         """Test that there are no duplicate categories."""
