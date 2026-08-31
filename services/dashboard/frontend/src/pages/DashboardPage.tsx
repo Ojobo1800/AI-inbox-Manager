@@ -774,7 +774,8 @@ const DashboardPage = () => {
         </div>
       )}
 
-      {/* Emails Processed Today */}
+      {/* Emails Processed Today — hidden when empty */}
+      {(todayEmailsLoading || (todayEmails && todayEmails.length > 0)) && (
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="bg-gray-200 px-6 py-3 flex items-center justify-between">
           <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Emails Processed Today</h2>
@@ -829,10 +830,12 @@ const DashboardPage = () => {
           )}
         </div>
       </div>
+      )}
 
       {/* Two-column layout: Recent Interviews + Recent Runs */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Interviews */}
+      <div className={`grid grid-cols-1 gap-6 ${interviewsLoading || (interviews && interviews.length > 0) ? 'lg:grid-cols-2' : ''}`}>
+        {/* Recent Interviews — hidden when empty */}
+        {(interviewsLoading || (interviews && interviews.length > 0)) && (
         <div className="bg-white shadow rounded-lg overflow-hidden">
           <div className="bg-gray-200 px-6 py-3 flex items-center justify-between">
             <h2 className="text-base font-bold text-gray-800 flex-1 text-center">Recent Interview Requests</h2>
