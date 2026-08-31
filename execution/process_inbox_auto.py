@@ -48,7 +48,15 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     force=True,   # override any handlers set by imported modules
     handlers=[
-        logging.FileHandler(log_dir / f"inbox_auto_{datetime.now().strftime('%Y%m%d')}.log"),
+        # encoding="utf-8" is required: per-email audit lines contain "→" and other
+        # non-Latin-1 characters. Without it, the default Windows cp1252 encoder
+        # raises UnicodeEncodeError on every such line and the logging module
+        # silently drops it — the entire "Applying actions" section vanished from
+        # the log file.
+        logging.FileHandler(
+            log_dir / f"inbox_auto_{datetime.now().strftime('%Y%m%d')}.log",
+            encoding="utf-8",
+        ),
         logging.StreamHandler(),
     ],
 )
@@ -79,7 +87,15 @@ def get_db_session():
             if not db_url:
                 db_path = project_root / "services" / "dashboard" / "api" / "email_dashboard.db"
                 db_url = f"sqlite:///{db_path}"
-            _db_engine = create_engine(db_url, echo=False)
+            engine_kwargs = {"echo": False}
+            if db_url.startswith("postgres"):
+                # Neon's free tier drops idle connections mid-run (a full run can
+                # take 10+ min with long IMAP / Google Sheets phases between DB
+                # writes). pool_pre_ping revalidates a connection before use and
+                # pool_recycle forces a refresh well inside Neon's idle timeout.
+                engine_kwargs.update(pool_pre_ping=True, pool_recycle=280)
+            _db_engine = create_engine(db_url, **engine_kwargs)
+            _ensure_schema(_db_engine)
             SessionLocal = sessionmaker(bind=_db_engine)
             _db_session = SessionLocal()
         except Exception as e:
@@ -89,61 +105,240 @@ def get_db_session():
 
 
 def close_db_session():
-    """Close database session."""
-    global _db_session
+    """Close database session.
+
+    A dropped connection (Neon idle timeout) makes SQLAlchemy's implicit
+    rollback-on-close raise. That is a cleanup-only failure — every prior
+    commit is already durable — so it must never propagate and fail the run.
+    """
+    global _db_session, _db_engine
     if _db_session:
-        _db_session.close()
+        try:
+            _db_session.close()
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"DB session close failed (ignored): {e}")
         _db_session = None
+    if _db_engine:
+        try:
+            _db_engine.dispose()
+        except Exception:
+            pass
+        _db_engine = None
+
+
+def _ensure_schema(engine) -> None:
+    """Bring an older database up to the current emails-table shape.
+
+    Two fixes, both idempotent and cheap (one inspect per run):
+      1. add the emails.message_id column (the real dedup key), and
+      2. drop the bogus UNIQUE index on emails.email_id — that column holds the
+         IMAP sequence number, which repeats every run, so the constraint made
+         every new insert fail once the old rows filled the low sequence range.
+
+    Keeps interns from having to remember a manual migration step.
+    """
+    log = logging.getLogger(__name__)
+    try:
+        from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+
+        inspector = _sa_inspect(engine)
+        if "emails" not in inspector.get_table_names():
+            return
+        dialect = engine.dialect.name
+        cols = {c["name"] for c in inspector.get_columns("emails")}
+        indexes = inspector.get_indexes("emails")
+
+        if "message_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(_sa_text("ALTER TABLE emails ADD COLUMN message_id VARCHAR(500)"))
+            log.info("Schema: added emails.message_id column")
+            indexes = _sa_inspect(engine).get_indexes("emails")
+
+        # Ensure the message_id index exists and is UNIQUE (multiple NULLs are
+        # allowed on both PostgreSQL and SQLite). Only touch it if it is missing
+        # or non-unique.
+        msgid_ix = next((ix for ix in indexes if ix.get("column_names") == ["message_id"]), None)
+        if msgid_ix is None or not msgid_ix.get("unique"):
+            with engine.begin() as conn:
+                try:
+                    conn.execute(_sa_text("DROP INDEX IF EXISTS ix_emails_message_id"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(_sa_text("CREATE UNIQUE INDEX ix_emails_message_id ON emails (message_id)"))
+                    log.info("Schema: made emails.message_id index UNIQUE")
+                except Exception:
+                    pass
+
+        # Drop the UNIQUE constraint/index on email_id if present, replace with a
+        # plain index.
+        unique_on_email_id = any(
+            ix.get("unique") and ix.get("column_names") == ["email_id"]
+            for ix in indexes
+        )
+        unique_constraints = {
+            uc["name"]
+            for uc in inspector.get_unique_constraints("emails")
+            if uc.get("column_names") == ["email_id"]
+        }
+        if unique_on_email_id or unique_constraints:
+            with engine.begin() as conn:
+                for uc_name in unique_constraints:
+                    try:
+                        conn.execute(_sa_text(f'ALTER TABLE emails DROP CONSTRAINT "{uc_name}"'))
+                    except Exception:
+                        pass
+                if dialect == "postgresql":
+                    try:
+                        conn.execute(_sa_text("DROP INDEX IF EXISTS ix_emails_email_id"))
+                        conn.execute(_sa_text("CREATE INDEX ix_emails_email_id ON emails (email_id)"))
+                    except Exception:
+                        pass
+                # SQLite: a UNIQUE declared inline on the column can't be dropped
+                # without a table rebuild; not worth it for the local dev DB.
+            log.info("Schema: dropped UNIQUE constraint on emails.email_id")
+    except Exception as e:
+        log.warning(f"Schema check failed (continuing): {e}")
+
+
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Normalise to naive UTC — the emails table stores tz-naive datetimes and
+    dashboard 'today' / 'last N days' queries compare against a naive now()."""
+    if dt.tzinfo is not None:
+        from datetime import timezone
+
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _parse_received_date(email_data: Dict[str, Any]) -> datetime:
+    """Best-effort parse of the email's received date from any known key."""
+    raw_date = email_data.get("email_date") or email_data.get("date")
+    if isinstance(raw_date, datetime):
+        return _to_naive_utc(raw_date)
+    if isinstance(raw_date, str) and raw_date.strip():
+        try:
+            return _to_naive_utc(datetime.fromisoformat(raw_date.replace("Z", "+00:00")))
+        except Exception:
+            try:
+                from email.utils import parsedate_to_datetime
+
+                return _to_naive_utc(parsedate_to_datetime(raw_date))
+            except Exception:
+                pass
+    return datetime.utcnow()
 
 
 def import_email_to_db(email_data: Dict[str, Any], classification: Dict[str, Any], folder: str = "INBOX") -> Optional[int]:
     """
-    Import an email to the dashboard database.
+    Import (upsert) an email + its classification into the dashboard database.
+
+    Dedup key is the RFC 5322 Message-ID header (`email_data["message_id"]`),
+    which is stable and globally unique. The IMAP sequence number
+    (`email_data["email_id"]`) is NOT usable for dedup — IMAP re-assigns it every
+    session, so historically every new email collided with an old row and the
+    import silently no-op'd.
 
     Args:
-        email_data: Email data from IMAP
+        email_data: Email data from fetch_emails() (keys: subject, sender_email,
+            sender_name, email_date, body_content, email_id, message_id)
         classification: Classification result
-        folder: Current folder
+        folder: Destination folder the email was routed to
 
     Returns:
-        Database ID of the email, or None if import failed
+        Database ID of the email row, or None if import failed
     """
     db = get_db_session()
     if not db:
+        logging.getLogger(__name__).warning("DB import skipped: no database session")
         return None
+
+    logger_ = logging.getLogger(__name__)
 
     try:
         from models import Email, Classification
 
-        email_uid = str(email_data.get("email_id", ""))
-        if not email_uid:
-            return None
+        seq_uid = str(email_data.get("email_id", "") or "")
+        message_id = (email_data.get("message_id") or "").strip()
 
-        # Check if email already exists
-        existing = db.query(Email).filter(Email.email_id == email_uid).first()
-        if existing:
+        # Normalise across the two key conventions used in this codebase.
+        subject = (email_data.get("subject") or "No Subject")[:500]
+        from_address = (
+            email_data.get("sender_email")
+            or email_data.get("from")
+            or "Unknown"
+        )[:255]
+        body = (email_data.get("body_content") or email_data.get("body") or "") or ""
+        received_date = _parse_received_date(email_data)
+
+        # ── Locate an existing row ──────────────────────────────────────────
+        existing = None
+        if message_id:
+            existing = db.query(Email).filter(Email.message_id == message_id).first()
+        if existing is None:
+            # No Message-ID (rare) — fall back to a content match so a
+            # re-processed email still de-dupes instead of duplicating.
+            existing = (
+                db.query(Email)
+                .filter(
+                    Email.subject == subject,
+                    Email.from_address == from_address,
+                    Email.received_date == received_date,
+                )
+                .first()
+            )
+
+        extracted = classification.get("extracted_data") or {}
+        category = (classification.get("category", "Unknown") or "")[:100]
+        confidence = float(classification.get("confidence", 0.0))
+        company_name = (extracted.get("company_name") or "")[:255] or None
+        position = (extracted.get("position_title") or "")[:255] or None
+
+        if existing is not None:
+            # Update folder + refresh the classification in place.
             existing.current_folder = folder
+            existing.subject = subject
+            existing.from_address = from_address
+            if message_id and not existing.message_id:
+                existing.message_id = message_id
+            if seq_uid:
+                existing.email_id = seq_uid
+
+            latest = (
+                db.query(Classification)
+                .filter(Classification.email_id == existing.id)
+                .order_by(Classification.classification_timestamp.desc())
+                .first()
+            )
+            if latest is None:
+                db.add(Classification(
+                    email_id=existing.id,
+                    category=category,
+                    confidence=confidence,
+                    company_name=company_name,
+                    position=position,
+                    classification_timestamp=datetime.utcnow(),
+                    classifier_version="gpt-4o",
+                    raw_response=classification,
+                ))
+            else:
+                latest.category = category
+                latest.confidence = confidence
+                latest.company_name = company_name
+                latest.position = position
+                latest.classification_timestamp = datetime.utcnow()
+                latest.raw_response = classification
+
             db.commit()
+            logger_.info(f"DB import: updated email id={existing.id} [{category}] → {folder}")
             return existing.id
 
-        # Parse received date safely
-        raw_date = email_data.get("date")
-        if isinstance(raw_date, datetime):
-            received_date = raw_date
-        elif isinstance(raw_date, str):
-            try:
-                received_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
-            except Exception:
-                received_date = datetime.utcnow()
-        else:
-            received_date = datetime.utcnow()
-
-        body = email_data.get("body", "") or ""
-
+        # ── Insert a new row ───────────────────────────────────────────────
         new_email = Email(
-            email_id=email_uid,
-            subject=(email_data.get("subject", "No Subject") or "")[:500],
-            from_address=(email_data.get("from", "Unknown") or "")[:255],
+            email_id=seq_uid or (message_id[:255] if message_id else f"noid-{datetime.utcnow().timestamp()}"),
+            message_id=message_id or None,
+            subject=subject,
+            from_address=from_address,
             received_date=received_date,
             body_preview=body[:500],
             full_body=body,
@@ -152,28 +347,25 @@ def import_email_to_db(email_data: Dict[str, Any], classification: Dict[str, Any
             fetch_timestamp=datetime.utcnow(),
         )
         db.add(new_email)
-        db.flush()  # get ID without committing
+        db.flush()  # assign PK without committing
         email_db_id = new_email.id
 
-        # Create classification record using correct model field names
-        extracted = classification.get("extracted_data") or {}
-        new_classification = Classification(
+        db.add(Classification(
             email_id=email_db_id,
-            category=(classification.get("category", "Unknown") or "")[:100],
-            confidence=float(classification.get("confidence", 0.0)),
-            company_name=(extracted.get("company_name") or "")[:255] or None,
-            position=(extracted.get("position_title") or "")[:255] or None,
+            category=category,
+            confidence=confidence,
+            company_name=company_name,
+            position=position,
             classification_timestamp=datetime.utcnow(),
             classifier_version="gpt-4o",
             raw_response=classification,
-        )
-        db.add(new_classification)
+        ))
         db.commit()
-
+        logger_.info(f"DB import: inserted email id={email_db_id} [{category}] → {folder}")
         return email_db_id
 
     except Exception as e:
-        logging.getLogger(__name__).error(f"Failed to import email to database: {e}")
+        logger_.error(f"Failed to import email to database: {e}")
         try:
             db.rollback()
         except Exception:
@@ -376,6 +568,158 @@ KNOWN_INTERVIEW_COMPANIES = {
     "empiric"
 }
 
+# Folder that holds "Other" emails for a second-pass review before deletion.
+# Emails that survive re-classification as spam are then permanently deleted.
+SPAM_REVIEW_FOLDER = "Spam Review"
+
+# Folder for low-confidence or unmapped categories — needs human attention.
+NEEDS_REVIEW_FOLDER = "Needs Review"
+
+# Minimum confidence required to route an email to its detected category folder.
+# Below this threshold the email goes to NEEDS_REVIEW_FOLDER instead.
+ROUTING_CONFIDENCE_THRESHOLD = 0.70
+
+# Master category → Gmail label mapping (module-level so both INBOX processing
+# and the spam-review pass use the same authoritative table).
+CATEGORY_TO_FOLDER: Dict[str, str] = {
+    # Interview flow
+    "Interview Confirmation":    "Interview Confirmation",
+    "Interview Schedule":        "Interview Scheduling",
+    "Interview Reschedule":      "Interview Rescheduled",
+    "Interview Cancelled":       "Interview Cancelled",
+    "Final Interview Scheduled": "Final Interview Scheduled",
+    "Instant Interview":         "Instant Interview",
+    "Client Screen":             "Client Screen",
+    "Phone Screen":              "Phone Screen (HR or Recruiter)",
+    # Outcomes
+    "Rejection":                 "Rejection",
+    "Offer":                     "Offer",
+    # Jobs & applications
+    "Job Alert":                 "Job Alerts",
+    "Job Invite":                "Job Invite",
+    "Job Machine":               "Job Machine",
+    "Application Notification":  "Application Notification",
+    # Actions & requests
+    "More Information Request":  "More Information Request",
+    "Background Check":          "Background Check",
+    "Assessment":                "Assessment",
+    "Google Sheet Request":      "Google Sheet Request",
+    # System / noise
+    "LinkedIn Notification":     "LinkedIn Notification",
+    "Gmail Notification":        "Gmail Notification",
+    "Forwarded Email":           "Forwarded Emails",
+    "Basecamp":                  "Basecamp",
+    "Account Recovery":          "Account Recovery",
+}
+
+
+def _run_spam_review_pass(
+    server: str, port: int, email_address: str, password: str
+) -> Dict[str, int]:
+    """
+    Second-pass review of emails sitting in SPAM_REVIEW_FOLDER.
+
+    Each email is re-classified:
+      - Still 'Other' or still below confidence threshold → permanently deleted
+      - Rescued (non-spam on second look) → moved to the correct category folder
+
+    This catches first-pass misclassifications before anything is destroyed.
+
+    Returns:
+        Dict with keys: reviewed, deleted, rescued
+    """
+    _logger = logging.getLogger(__name__)
+    results: Dict[str, int] = {"reviewed": 0, "deleted": 0, "rescued": 0}
+
+    try:
+        review_emails = fetch_emails(
+            server=server,
+            port=port,
+            email_address=email_address,
+            password=password,
+            folder=SPAM_REVIEW_FOLDER,
+            criteria="ALL",
+            limit=50,
+            mark_as_read=False,
+        )
+    except Exception as e:
+        _logger.debug(f"Spam Review folder not accessible (may not exist yet): {e}")
+        return results
+
+    if not review_emails:
+        _logger.info("Spam Review folder is empty — nothing to re-examine.")
+        return results
+
+    _logger.info(f"")
+    _logger.info(f"=== SECOND-PASS SPAM REVIEW ({len(review_emails)} email(s)) ===")
+
+    confirmed_spam_ids: List[str] = []
+    rescued_moves: Dict[str, str] = {}
+
+    for email_data in review_emails:
+        results["reviewed"] += 1
+        subject = (email_data.get("subject") or "")[:70]
+        email_id = str(email_data.get("email_id", ""))
+
+        try:
+            classification = classify_email(email_data, validate_only=False)
+            classification.pop("_gpt_usage", None)
+            category   = classification.get("category", "Other")
+            confidence = float(classification.get("confidence", 0.0))
+            edge_case  = classification.get("edge_case", {})
+        except Exception as exc:
+            _logger.error(f"  Re-classification failed for '{subject}': {exc} — treating as spam")
+            confirmed_spam_ids.append(email_id)
+            continue
+
+        is_spam = (
+            category == "Other"
+            or confidence < ROUTING_CONFIDENCE_THRESHOLD
+            or (edge_case.get("is_edge_case") and edge_case.get("type") in ["spam"])
+        )
+
+        if is_spam:
+            confirmed_spam_ids.append(email_id)
+            _logger.info(f"  [CONFIRMED SPAM → DELETE] {category} ({confidence:.0%}) — {subject}")
+        else:
+            dest = CATEGORY_TO_FOLDER.get(category, NEEDS_REVIEW_FOLDER)
+            rescued_moves[email_id] = dest
+            _logger.info(f"  [RESCUED → {dest}] {category} ({confidence:.0%}) — {subject}")
+
+    if confirmed_spam_ids:
+        try:
+            deleted = delete_emails(
+                server=server,
+                port=port,
+                email_address=email_address,
+                password=password,
+                email_ids=confirmed_spam_ids,
+                folder=SPAM_REVIEW_FOLDER,
+            )
+            results["deleted"] = deleted
+            _logger.info(f"Spam review: permanently deleted {deleted} confirmed spam email(s)")
+        except Exception as exc:
+            _logger.error(f"Spam review deletion failed: {exc}")
+
+    if rescued_moves:
+        try:
+            moved = move_emails(
+                server=server,
+                port=port,
+                email_address=email_address,
+                password=password,
+                email_moves=rescued_moves,
+                source_folder=SPAM_REVIEW_FOLDER,
+            )
+            results["rescued"] = moved
+            _logger.info(f"Spam review: rescued {moved} misclassified email(s) to correct folders")
+        except Exception as exc:
+            _logger.error(f"Spam review move failed: {exc}")
+
+    _logger.info(f"=== SPAM REVIEW COMPLETE — reviewed={results['reviewed']} deleted={results['deleted']} rescued={results['rescued']} ===")
+    _logger.info("")
+    return results
+
 
 def is_from_known_company(email_data: Dict[str, Any], classification: Dict[str, Any]) -> bool:
     """
@@ -464,6 +808,11 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
     logger.info("")
 
     try:
+        # Second-pass review: re-classify anything already sitting in Spam Review.
+        # Run this BEFORE fetching new INBOX emails so the counts stay clean.
+        spam_review_stats = _run_spam_review_pass(server, port, email_address, password)
+        stats["spam_review"] = spam_review_stats
+
         # Fetch ONLY unread emails
         logger.info("Fetching unread emails...")
         emails = fetch_emails(
@@ -529,40 +878,11 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
         stats["total_emails"] = len(emails)
 
         interview_requests = []
-        spam_email_ids = []
-        email_moves = {}
+        spam_email_ids: List[str] = []  # reserved for future hard-delete bypass; not used currently
+        email_moves: Dict[str, str] = {}
 
-        # Category to server folder mapping
-        category_to_folder = {
-            # Interview flow
-            "Interview Confirmation":    "Interview Confirmation",
-            "Interview Schedule":        "Interview Scheduling",
-            "Interview Reschedule":      "Interview Rescheduled",
-            "Interview Cancelled":       "Interview Cancelled",
-            "Final Interview Scheduled": "Final Interview Scheduled",
-            "Instant Interview":         "Instant Interview",
-            "Client Screen":             "Client Screen",
-            "Phone Screen":              "Phone Screen (HR or Recruiter)",
-            # Outcomes
-            "Rejection":                 "Rejection",
-            "Offer":                     "Offer",
-            # Jobs & applications
-            "Job Alert":                 "Job Alerts",
-            "Job Invite":                "Job Invite",
-            "Job Machine":               "Job Machine",
-            "Application Notification":  "Application Notification",
-            # Actions & requests
-            "More Information Request":  "More Information Request",
-            "Background Check":          "Background Check",
-            "Assessment":                "Assessment",
-            "Google Sheet Request":      "Google Sheet Request",
-            # System / noise
-            "LinkedIn Notification":     "LinkedIn Notification",
-            "Gmail Notification":        "Gmail Notification",
-            "Forwarded Email":           "Forwarded Emails",
-            "Basecamp":                  "Basecamp",
-            "Account Recovery":          "Account Recovery",
-        }
+        # CATEGORY_TO_FOLDER, NEEDS_REVIEW_FOLDER, SPAM_REVIEW_FOLDER, and
+        # ROUTING_CONFIDENCE_THRESHOLD are all module-level constants defined above.
 
         logger.info("")
         logger.info(f"Classifying {len(emails)} emails in parallel (8 workers)...")
@@ -743,30 +1063,51 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                         stats["categories"][category] = stats["categories"].get(category, 0) + 1
 
                 elif category == "Other":
-                    # SPAM - Delete
-                    stats["spam_deleted"] += 1
-                    spam_email_ids.append(email_data.get("email_id"))
-                    _sp_folder_map[str(email_data.get("email_id", ""))] = "Deleted"
-                    logger.info(f"[{idx}/{len(emails)}] [SPAM] - {email_subject}")
+                    # Potential spam — quarantine in Spam Review for a second look.
+                    # The next run's _run_spam_review_pass() will either delete it
+                    # permanently (if still classified as Other) or rescue it to the
+                    # correct folder (if it turns out to be something else).
+                    stats["spam_deleted"] += 1  # counter name kept for backward compat
+                    email_moves[email_data.get("email_id")] = SPAM_REVIEW_FOLDER
+                    _sp_folder_map[str(email_data.get("email_id", ""))] = SPAM_REVIEW_FOLDER
+                    logger.info(f"[{idx}/{len(emails)}] [POSSIBLE SPAM → Spam Review] - {email_subject}")
+                    try:
+                        import_email_to_db(email_data, classification, SPAM_REVIEW_FOLDER)
+                    except Exception as _e:
+                        logger.error(f"              [DB import failed: {_e}]")
 
                 else:
                     # OTHER CATEGORIES - Organize
                     stats["organized"] += 1
                     stats["categories"][category] = stats["categories"].get(category, 0) + 1
 
-                    # Track for moving
-                    server_folder = category_to_folder.get(category)
-                    if server_folder:
-                        email_moves[email_data.get("email_id")] = server_folder
+                    # Low-confidence classifications go to Needs Review instead of
+                    # the target folder — a human should verify before the email is
+                    # acted on.  Unmapped categories also land in Needs Review so
+                    # they never loop in INBOX forever as UNSEEN.
+                    mapped_folder = CATEGORY_TO_FOLDER.get(category)
+                    if confidence < ROUTING_CONFIDENCE_THRESHOLD:
+                        server_folder = NEEDS_REVIEW_FOLDER
+                        logger.warning(
+                            f"              [Low confidence {confidence:.0%} < {ROUTING_CONFIDENCE_THRESHOLD:.0%}"
+                            f" — routing '{category}' to '{NEEDS_REVIEW_FOLDER}']"
+                        )
+                    elif mapped_folder:
+                        server_folder = mapped_folder
+                    else:
+                        server_folder = NEEDS_REVIEW_FOLDER
+                        logger.warning(f"              [No folder mapping for '{category}' — moved to '{NEEDS_REVIEW_FOLDER}']")
+
+                    email_moves[email_data.get("email_id")] = server_folder
 
                     # Track folder for SharePoint audit log
-                    _sp_folder_map[str(email_data.get("email_id", ""))] = server_folder or "Organized"
+                    _sp_folder_map[str(email_data.get("email_id", ""))] = server_folder
 
-                    logger.info(f"[{idx}/{len(emails)}] [{category}] - {email_subject}")
+                    logger.info(f"[{idx}/{len(emails)}] [{category}] ({confidence:.0%}) → {server_folder} — {email_subject}")
 
                     # Save to database for audit trail
                     try:
-                        import_email_to_db(email_data, classification, server_folder or "Organized")
+                        import_email_to_db(email_data, classification, server_folder)
                     except Exception as _e:
                         logger.error(f"              [DB import failed: {_e}]")
 
@@ -790,24 +1131,6 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                 logger.error(f"Failed to move emails: {e}")
         elif email_moves and cost_guardrail_triggered:
             logger.warning(f"Cost guardrail: skipped moving {len(email_moves)} emails")
-
-        # Delete spam
-        if spam_email_ids and not cost_guardrail_triggered:
-            logger.info("")
-            logger.info(f"Deleting {len(spam_email_ids)} spam emails...")
-            try:
-                deleted_count = delete_emails(
-                    server=server,
-                    port=port,
-                    email_address=email_address,
-                    password=password,
-                    email_ids=spam_email_ids
-                )
-                logger.info(f"Successfully deleted {deleted_count} spam emails")
-            except Exception as e:
-                logger.error(f"Failed to delete spam: {e}")
-        elif spam_email_ids and cost_guardrail_triggered:
-            logger.warning(f"Cost guardrail: skipped deleting {len(spam_email_ids)} spam emails")
 
         # ── Google Sheets audit log ───────────────────────────────────────────
         # Non-blocking: appends all classified emails to a Google Sheet for
@@ -857,10 +1180,17 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
         logger.info("=" * 60)
         logger.info("PROCESSING SUMMARY")
         logger.info("=" * 60)
+        sr = stats.get("spam_review", {})
         logger.info(f"Total Processed: {stats['total_emails']}")
         logger.info(f"Interview Requests (kept in inbox): {stats['interview_requests']}")
         logger.info(f"Organized to folders: {stats['organized']}")
-        logger.info(f"Spam Deleted: {stats['spam_deleted']}")
+        logger.info(f"Quarantined to Spam Review: {stats['spam_deleted']}")
+        logger.info(
+            f"Spam Review pass: "
+            f"reviewed={sr.get('reviewed', 0)} "
+            f"deleted={sr.get('deleted', 0)} "
+            f"rescued={sr.get('rescued', 0)}"
+        )
 
         if interview_requests:
             logger.info("")
@@ -912,7 +1242,10 @@ def _log_process_run(stats: Dict[str, Any], summary_file=None, status: str = "su
                 return
             dashboard_db_url = f"sqlite:///{db_path}"
 
-        engine = create_engine(dashboard_db_url, echo=False)
+        engine_kwargs = {"echo": False}
+        if dashboard_db_url.startswith("postgres"):
+            engine_kwargs.update(pool_pre_ping=True, pool_recycle=280)
+        engine = create_engine(dashboard_db_url, **engine_kwargs)
         Session = sessionmaker(bind=engine)
         db = Session()
 

@@ -24,7 +24,11 @@ class Email(Base):
     __tablename__ = "emails"
 
     id = Column(Integer, primary_key=True, index=True)
-    email_id = Column(String(255), unique=True, nullable=False, index=True)  # Gmail UID
+    # IMAP message-sequence number. NOT stable — IMAP re-assigns it every session,
+    # so it must never carry a unique constraint or be used as a dedup key.
+    email_id = Column(String(255), nullable=False, index=True)
+    # RFC 5322 Message-ID header — stable and globally unique. This is the dedup key.
+    message_id = Column(String(500), nullable=True, unique=True, index=True)
     subject = Column(String(500), nullable=False)
     from_address = Column(String(255), nullable=False)
     received_date = Column(DateTime, nullable=False, index=True)

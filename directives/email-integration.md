@@ -21,7 +21,11 @@ This directive enables the email classification system to process real emails fr
   - sender_name: Sender display name
   - email_date: Received timestamp
   - body_content: Email body (plain text)
-  - email_id: Unique message ID for tracking
+  - email_id: IMAP message-sequence number — **NOT stable**. IMAP re-assigns it
+    every session, so it must never be used as a database key or dedup key.
+    Safe only for operations inside the same IMAP connection (fetch, move).
+  - message_id: RFC 5322 `Message-ID` header — stable and globally unique.
+    This is the key to use for de-duplication and database upserts.
   - raw_email: Full raw email for archival
 
 ## Steps
@@ -61,7 +65,8 @@ This directive enables the email classification system to process real emails fr
     "sender_name": "...",
     "email_date": "ISO 8601",
     "body_content": "plain text",
-    "email_id": "unique_id"
+    "email_id": "IMAP sequence number (ephemeral — same-session use only)",
+    "message_id": "<...@host>  (RFC 5322 Message-ID — stable dedup key)"
   }
   ```
 
@@ -98,8 +103,15 @@ This directive enables the email classification system to process real emails fr
 - **Handling**: Extract text from HTML using html2text or similar, preserve links
 
 ### Duplicate Processing
-- **Scenario**: Email already processed but not marked
-- **Handling**: Track processed email IDs in database/file, skip duplicates
+- **Scenario**: Email already processed, or re-fetched on a later run
+- **Handling**: De-duplicate on the RFC 5322 `Message-ID` header, never on the
+  IMAP sequence number (`email_id`). The dashboard `emails` table has a UNIQUE
+  index on `message_id`; `import_email_to_db()` upserts against it.
+- **History**: From ~2026-06-29 to 2026-08-31 the importer keyed dedup on the
+  IMAP sequence number. Because IMAP reuses those numbers every run, every new
+  email collided with an old row and was silently dropped — the dashboard's
+  email tables froze while Gmail sorting and Google Sheets kept working. Fixed
+  by adding `emails.message_id` and keying on it.
 
 ## Safety Constraints
 
@@ -201,3 +213,9 @@ Before going live:
 ## Revision History
 
 - **v1.0** (2026-01-27): Initial email integration directive
+- **v1.1** (2026-08-31): Documented that `email_id` is an ephemeral IMAP sequence
+  number and must not be used as a database/dedup key. De-duplication now keys on
+  the `Message-ID` header via the new `emails.message_id` column (UNIQUE). Root
+  cause of the 2026-06-29 → 2026-08-31 dashboard-data freeze. See
+  `execution/migrate_add_message_id.py` and
+  `tests/execution/test_import_email_to_db.py`.
