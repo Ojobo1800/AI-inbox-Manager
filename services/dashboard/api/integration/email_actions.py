@@ -54,8 +54,10 @@ def move_email(
     """
     logger.info(f"Moving email {email.email_id} to {target_folder}")
 
-    # Prepare move operation
+    # Prepare move operation. Handle is the UID; pass the Message-ID too so
+    # move_emails() can recover if that UID has since shifted.
     email_moves = {email.email_id: target_folder}
+    id_to_mid = {str(email.email_id): (email.message_id or "")}
 
     # Execute move via IMAP
     try:
@@ -66,7 +68,8 @@ def move_email(
             port=settings.email_port,
             email_address=settings.email_address,
             password=settings.email_password,
-            email_moves=email_moves
+            email_moves=email_moves,
+            id_to_message_id=id_to_mid,
         )
 
         if moved_count == 0:
@@ -132,7 +135,8 @@ def delete_email(
             port=settings.email_port,
             email_address=settings.email_address,
             password=settings.email_password,
-            email_ids=[email.email_id]
+            email_ids=[email.email_id],
+            id_to_message_id={str(email.email_id): (email.message_id or "")},
         )
 
         if deleted_count == 0:

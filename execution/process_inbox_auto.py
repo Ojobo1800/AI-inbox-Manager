@@ -655,6 +655,12 @@ def _run_spam_review_pass(
 
     confirmed_spam_ids: List[str] = []
     rescued_moves: Dict[str, str] = {}
+    # {uid: message_id} — lets move/delete recover a stale handle via the
+    # stable RFC 5322 Message-ID if a UID has shifted since this fetch.
+    review_id_to_mid: Dict[str, str] = {
+        str(e.get("email_id", "")): (e.get("message_id") or "")
+        for e in review_emails
+    }
 
     for email_data in review_emails:
         results["reviewed"] += 1
@@ -695,6 +701,7 @@ def _run_spam_review_pass(
                 password=password,
                 email_ids=confirmed_spam_ids,
                 folder=SPAM_REVIEW_FOLDER,
+                id_to_message_id=review_id_to_mid,
             )
             results["deleted"] = deleted
             _logger.info(f"Spam review: permanently deleted {deleted} confirmed spam email(s)")
@@ -710,6 +717,7 @@ def _run_spam_review_pass(
                 password=password,
                 email_moves=rescued_moves,
                 source_folder=SPAM_REVIEW_FOLDER,
+                id_to_message_id=review_id_to_mid,
             )
             results["rescued"] = moved
             _logger.info(f"Spam review: rescued {moved} misclassified email(s) to correct folders")
@@ -823,7 +831,8 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
             folder="INBOX",
             criteria="UNSEEN",  # CRITICAL: Only unread emails
             limit=limit or _MAX_EMAILS_PER_RUN,  # Fetch only what we'll process
-            mark_as_read=False  # Never mark interview requests as read
+            mark_as_read=False,  # Never mark interview requests as read
+            newest_first=True,  # Sort today's mail before draining any backlog
         )
 
         if not emails:
@@ -880,6 +889,11 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
         interview_requests = []
         spam_email_ids: List[str] = []  # reserved for future hard-delete bypass; not used currently
         email_moves: Dict[str, str] = {}
+        # {uid: message_id} so move_emails can recover a stale handle via the
+        # stable RFC 5322 Message-ID if a UID shifts between now and the move.
+        id_to_mid: Dict[str, str] = {
+            str(e.get("email_id", "")): (e.get("message_id") or "") for e in emails
+        }
 
         # CATEGORY_TO_FOLDER, NEEDS_REVIEW_FOLDER, SPAM_REVIEW_FOLDER, and
         # ROUTING_CONFIDENCE_THRESHOLD are all module-level constants defined above.
@@ -1124,7 +1138,8 @@ def process_unread_emails(limit: Optional[int] = None) -> Dict[str, Any]:
                     port=port,
                     email_address=email_address,
                     password=password,
-                    email_moves=email_moves
+                    email_moves=email_moves,
+                    id_to_message_id=id_to_mid,
                 )
                 logger.info(f"Successfully moved {moved_count} emails")
             except Exception as e:

@@ -17,6 +17,7 @@ import imaplib
 import logging
 import os
 import json
+import re
 from datetime import datetime
 from email.header import decode_header
 from typing import Dict, Any, List, Optional, Tuple
@@ -41,24 +42,114 @@ class EmailConnectionError(Exception):
     pass
 
 
+# ── Stable-identifier helpers ────────────────────────────────────────────────
+#
+# IMAP message-sequence numbers are position-based: they renumber on every
+# expunge and are only valid inside the connection that read them.  The
+# classify → move pipeline resolves a message in one connection and mutates it
+# in a *later* one, minutes later, while a human works the same mailbox — so
+# this module tracks messages by UID (stable across sessions and expunges) and,
+# as a second line of defence, re-resolves a vanished UID via the RFC 5322
+# Message-ID header before touching anything.
+#
+# Mutations use Gmail label operations (X-GM-LABELS) rather than
+# COPY + \Deleted + EXPUNGE, so the organize path can never permanently destroy
+# mail; the only hard delete (confirmed-spam purge) is scoped with UID EXPUNGE.
+
+
+_MESSAGE_ID_RE = re.compile(r"Message-ID:\s*(<[^>]+>)", re.I)
+_UID_RE = re.compile(r"\bUID\s+(\d+)")
+
+
+def _quote_folder(folder: str) -> str:
+    """IMAP-quote a mailbox name so names with spaces ('Spam Review') parse."""
+    if len(folder) >= 2 and folder[0] == '"' and folder[-1] == '"':
+        return folder
+    return '"%s"' % folder.replace('"', '\\"')
+
+
+def _gm_label_atom(label: str) -> str:
+    """Render a label for an X-GM-LABELS list. System labels (\\Inbox) stay bare."""
+    if label.startswith("\\"):
+        return label
+    return '"%s"' % label.replace('"', '\\"')
+
+
+def _resolve_folder_uids(imap: "imaplib.IMAP4") -> Tuple[set, Dict[str, str]]:
+    """
+    Snapshot the currently-selected mailbox.
+
+    Returns:
+        (present_uids, message_id -> uid)  — both resolved live in this
+        connection, so the identifiers are guaranteed current.
+    """
+    present: set = set()
+    mid_to_uid: Dict[str, str] = {}
+
+    status, data = imap.uid("SEARCH", None, "ALL")
+    if status != "OK" or not data or not data[0]:
+        return present, mid_to_uid
+
+    uid_bytes = data[0].split()
+    present = {u.decode() for u in uid_bytes}
+    if not uid_bytes:
+        return present, mid_to_uid
+
+    status, fetched = imap.uid(
+        "FETCH", b",".join(uid_bytes), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
+    )
+    if status != "OK" or not fetched:
+        return present, mid_to_uid
+
+    for part in fetched:
+        if not isinstance(part, tuple):
+            continue
+        meta = part[0].decode("ascii", "ignore") if part[0] else ""
+        blob = part[1].decode("utf-8", "ignore") if part[1] else ""
+        uid_match = _UID_RE.search(meta)
+        mid_match = _MESSAGE_ID_RE.search(blob)
+        if uid_match and mid_match:
+            mid_to_uid[mid_match.group(1).strip()] = uid_match.group(1)
+
+    return present, mid_to_uid
+
+
+def _log_uidvalidity(imap: "imaplib.IMAP4", folder: str) -> None:
+    """Log the folder's UIDVALIDITY so a (very rare) reset is visible in logs."""
+    try:
+        raw = imap.untagged_responses.get("UIDVALIDITY")
+        if raw:
+            logger.info(f"{folder} UIDVALIDITY={raw[0].decode() if isinstance(raw[0], bytes) else raw[0]}")
+    except Exception:
+        pass
+
+
 def delete_emails(
     server: str,
     port: int,
     email_address: str,
     password: str,
     email_ids: List[str],
-    folder: str = "INBOX"
+    folder: str = "INBOX",
+    id_to_message_id: Optional[Dict[str, str]] = None,
 ) -> int:
     """
-    Delete emails from the server.
+    Permanently delete emails from the server.
+
+    Handles are UIDs (see module docstring).  Each is verified against the
+    folder's live UID set — and, if missing, re-resolved via its Message-ID —
+    before anything is flagged, so a stale handle can never purge the wrong
+    message.  Deletion is scoped with UID EXPUNGE (RFC 4315): only the messages
+    flagged here are expunged, never anything else in the folder.
 
     Args:
         server: IMAP server address
         port: IMAP port
         email_address: Email address
         password: Email password
-        email_ids: List of email IDs to delete
+        email_ids: UIDs of the messages to delete
         folder: Folder to delete from
+        id_to_message_id: Optional {uid: message_id} for stale-handle recovery
 
     Returns:
         Number of emails successfully deleted
@@ -66,35 +157,69 @@ def delete_emails(
     if not email_ids:
         return 0
 
+    id_to_message_id = id_to_message_id or {}
+    imap = None
     try:
-        # Connect
         imap = connect_to_imap(server, port, email_address, password)
 
-        # Select folder (writable - not readonly)
-        imap.select(folder)
+        status, _ = imap.select(_quote_folder(folder))  # writable
+        if status != "OK":
+            raise EmailFetchError(f"Cannot select folder {folder!r} for deletion")
+        _log_uidvalidity(imap, folder)
 
-        deleted_count = 0
-        for email_id in email_ids:
-            try:
-                # Mark for deletion
-                imap.store(email_id, '+FLAGS', '\\Deleted')
-                deleted_count += 1
-            except Exception as e:
-                logger.error(f"Failed to mark email {email_id} for deletion: {e}")
+        present, mid_to_uid = _resolve_folder_uids(imap)
 
-        # Expunge (permanently delete marked emails)
-        imap.expunge()
+        targets: List[str] = []
+        for handle in email_ids:
+            uid = str(handle)
+            if uid not in present:
+                mid = id_to_message_id.get(uid)
+                recovered = mid_to_uid.get(mid) if mid else None
+                if recovered:
+                    logger.info(f"Delete: recovered UID {uid} -> {recovered} via Message-ID")
+                    uid = recovered
+                else:
+                    logger.warning(
+                        f"Delete: message {handle} not present in {folder!r} "
+                        f"(already gone) — skipping"
+                    )
+                    continue
+            targets.append(uid)
 
-        logger.info(f"Successfully deleted {deleted_count} email(s)")
+        if not targets:
+            logger.info("Delete: nothing to do (no handles resolved)")
+            return 0
 
-        # Close connection
-        imap.logout()
+        for uid in targets:
+            imap.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
 
-        return deleted_count
+        # UIDPLUS: expunge ONLY the UIDs we just flagged. Never a blind
+        # expunge() — this mailbox is also worked by a human.
+        try:
+            typ, _ = imap.uid("EXPUNGE", ",".join(targets))
+            if typ != "OK":
+                raise imaplib.IMAP4.error(f"UID EXPUNGE returned {typ}")
+        except imaplib.IMAP4.error as exc:
+            logger.warning(
+                f"UID EXPUNGE unavailable ({exc}) — falling back to "
+                f"folder-scoped expunge() on {folder!r}"
+            )
+            imap.expunge()
 
+        logger.info(f"Successfully deleted {len(targets)} email(s) from {folder!r}")
+        return len(targets)
+
+    except EmailFetchError:
+        raise
     except Exception as e:
         logger.error(f"Email deletion failed: {e}")
         raise EmailFetchError(f"Failed to delete emails: {str(e)}")
+    finally:
+        if imap is not None:
+            try:
+                imap.logout()
+            except Exception:
+                pass
 
 
 def move_emails(
@@ -103,79 +228,95 @@ def move_emails(
     email_address: str,
     password: str,
     email_moves: Dict[str, str],
-    source_folder: str = "INBOX"
+    source_folder: str = "INBOX",
+    id_to_message_id: Optional[Dict[str, str]] = None,
 ) -> int:
     """
-    Move emails to different folders on the server.
+    Organize emails by Gmail label, then remove them from the source folder.
+
+    For each message this applies the destination label with
+    ``STORE +X-GM-LABELS`` (Gmail auto-creates the label) and only then strips
+    the source-folder label (``\\Inbox`` for the inbox, otherwise the folder's
+    own label) with ``STORE -X-GM-LABELS``.  There is no COPY, no ``\\Deleted``
+    and no ``expunge()`` — the organize path cannot permanently delete mail, and
+    a partial failure just leaves an extra label to be retried next run.
+
+    Handles are UIDs (see module docstring); each is checked against the live
+    UID set and, if missing, re-resolved via its Message-ID before any mutation.
 
     Args:
-        server: IMAP server address
-        port: IMAP port
-        email_address: Email address
-        password: Email password
-        email_moves: Dictionary mapping email_id -> destination_folder
-        source_folder: Source folder (default: INBOX)
+        email_moves: {uid: destination_label}
+        source_folder: folder the messages currently live in (default INBOX)
+        id_to_message_id: optional {uid: message_id} for stale-handle recovery
 
     Returns:
-        Number of emails successfully moved
+        Number of emails successfully organized.
     """
     if not email_moves:
         return 0
 
-    def _ensure_folder(imap_conn, folder: str) -> bool:
-        """Create folder/label if it does not already exist. Returns True if ready."""
-        quoted = f'"{folder}"'
-        status, data = imap_conn.select(quoted)
-        if status == "OK":
-            return True
-        # Folder missing — create it
-        status, data = imap_conn.create(quoted)
-        if status == "OK":
-            logger.info(f"Created Gmail label/folder: {folder}")
-            return True
-        logger.warning(f"Could not create folder '{folder}': {data}")
-        return False
+    id_to_message_id = id_to_message_id or {}
+    leave_label = "\\Inbox" if source_folder.upper() == "INBOX" else source_folder
 
+    imap = None
     try:
-        # Connect
         imap = connect_to_imap(server, port, email_address, password)
 
-        # Pre-create all destination folders that don't exist yet
-        needed_folders = set(email_moves.values())
-        for folder in needed_folders:
-            _ensure_folder(imap, folder)
+        status, _ = imap.select(_quote_folder(source_folder))  # writable
+        if status != "OK":
+            raise EmailFetchError(f"Cannot select source folder {source_folder!r}")
+        _log_uidvalidity(imap, source_folder)
 
-        # Select source folder (writable)
-        imap.select(source_folder)
+        present, mid_to_uid = _resolve_folder_uids(imap)
 
         moved_count = 0
-        for email_id, dest_folder in email_moves.items():
-            try:
-                # Quote folder name properly for IMAP
-                quoted_folder = f'"{dest_folder}"'
+        for handle, dest_folder in email_moves.items():
+            uid = str(handle)
 
-                # Copy to destination folder
-                imap.copy(email_id, quoted_folder)
+            if uid not in present:
+                mid = id_to_message_id.get(uid)
+                recovered = mid_to_uid.get(mid) if mid else None
+                if recovered:
+                    logger.info(f"Move: recovered UID {uid} -> {recovered} via Message-ID")
+                    uid = recovered
+                else:
+                    logger.warning(
+                        f"Move: message {handle} no longer in {source_folder!r} "
+                        f"(already moved or deleted) — skipping"
+                    )
+                    continue
 
-                # Mark original for deletion
-                imap.store(email_id, '+FLAGS', '\\Deleted')
-                moved_count += 1
-            except Exception as e:
-                logger.error(f"Failed to move email {email_id} to {dest_folder}: {e}")
+            # 1. Apply the destination label first (safe, reversible, auto-creates).
+            s1, r1 = imap.uid("STORE", uid, "+X-GM-LABELS", f"({_gm_label_atom(dest_folder)})")
+            if s1 != "OK":
+                logger.error(f"Move: failed to label UID {uid} as {dest_folder!r}: {r1}")
+                continue
 
-        # Expunge deleted emails
-        imap.expunge()
+            # 2. Only now remove it from the source folder.
+            s2, r2 = imap.uid("STORE", uid, "-X-GM-LABELS", f"({_gm_label_atom(leave_label)})")
+            if s2 != "OK":
+                logger.error(
+                    f"Move: labeled UID {uid} {dest_folder!r} but could not leave "
+                    f"{source_folder!r}: {r2} — will retry next run"
+                )
+                continue
 
-        logger.info(f"Successfully moved {moved_count} email(s)")
+            moved_count += 1
 
-        # Close connection
-        imap.logout()
-
+        logger.info(f"Successfully moved {moved_count} of {len(email_moves)} email(s)")
         return moved_count
 
+    except EmailFetchError:
+        raise
     except Exception as e:
         logger.error(f"Email moving failed: {e}")
         raise EmailFetchError(f"Failed to move emails: {str(e)}")
+    finally:
+        if imap is not None:
+            try:
+                imap.logout()
+            except Exception:
+                pass
 
 
 def connect_to_imap(
@@ -257,7 +398,8 @@ def select_folder(imap: imaplib.IMAP4_SSL, folder: str = "INBOX") -> int:
     """
     try:
         logger.info(f"Selecting folder: {folder}")
-        status, messages = imap.select(folder, readonly=True)
+        # Quote so names with spaces ("Spam Review") don't trip the IMAP parser.
+        status, messages = imap.select(_quote_folder(folder), readonly=True)
 
         if status != "OK":
             raise EmailFetchError(f"Failed to select folder: {folder}")
@@ -274,39 +416,56 @@ def select_folder(imap: imaplib.IMAP4_SSL, folder: str = "INBOX") -> int:
 def search_emails(
     imap: imaplib.IMAP4_SSL,
     criteria: str = "UNSEEN",
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    exclude_gm_labels: Optional[List[str]] = None,
+    newest_first: bool = False,
 ) -> List[str]:
     """
-    Search for emails matching criteria.
+    Search for emails matching criteria and return their **UIDs**.
+
+    UIDs (not message-sequence numbers) are returned because they stay valid
+    across IMAP sessions and are unaffected by expunges — the move step runs in
+    a separate, later connection.
 
     Args:
         imap: Connected IMAP client
         criteria: IMAP search criteria (e.g., "UNSEEN", "ALL")
-        limit: Maximum number of emails to fetch (None = all)
+        limit: Maximum number of emails to return (None = all)
+        exclude_gm_labels: Gmail labels to exclude, applied as
+            ``NOT X-GM-LABELS <label>`` (e.g. ["InboxGenius-Processed"])
+        newest_first: return highest UIDs first, so fresh mail is processed
+            ahead of a backlog (default False keeps ascending order)
 
     Returns:
-        List of email IDs matching criteria
+        List of UID strings matching criteria
 
     Raises:
         EmailFetchError: If search fails
     """
     try:
-        logger.info(f"Searching for emails with criteria: {criteria}")
-        status, messages = imap.search(None, criteria)
+        terms: List[str] = [criteria]
+        for label in (exclude_gm_labels or []):
+            terms += ["NOT", "X-GM-LABELS", label]
+
+        logger.info(f"Searching (UID) for emails: {' '.join(terms)}")
+        status, messages = imap.uid("SEARCH", None, *terms)
 
         if status != "OK":
-            raise EmailFetchError(f"Search failed with criteria: {criteria}")
+            raise EmailFetchError(f"Search failed with criteria: {' '.join(terms)}")
 
-        # Get list of email IDs
-        email_ids = messages[0].split()
+        uids = messages[0].split()
+        if newest_first:
+            uids = uids[::-1]
 
-        if limit and len(email_ids) > limit:
-            logger.info(f"Limiting results from {len(email_ids)} to {limit}")
-            email_ids = email_ids[:limit]
+        if limit and len(uids) > limit:
+            logger.info(f"Limiting results from {len(uids)} to {limit}")
+            uids = uids[:limit]
 
-        logger.info(f"Found {len(email_ids)} matching emails")
-        return [email_id.decode() for email_id in email_ids]
+        logger.info(f"Found {len(uids)} matching emails")
+        return [uid.decode() for uid in uids]
 
+    except EmailFetchError:
+        raise
     except Exception as e:
         logger.error(f"Email search failed: {e}")
         raise EmailFetchError(f"Search failed: {str(e)}")
@@ -452,13 +611,13 @@ def parse_email_message(raw_email: bytes, email_id: str) -> Dict[str, Any]:
         raise EmailFetchError(f"Email parsing failed: {str(e)}")
 
 
-def fetch_email_by_id(imap: imaplib.IMAP4_SSL, email_id: str) -> bytes:
+def fetch_email_by_uid(imap: imaplib.IMAP4_SSL, uid: str) -> bytes:
     """
-    Fetch raw email content by ID.
+    Fetch raw email content by UID.
 
     Args:
         imap: Connected IMAP client
-        email_id: Email ID to fetch
+        uid: Message UID to fetch
 
     Returns:
         Raw email bytes
@@ -467,17 +626,24 @@ def fetch_email_by_id(imap: imaplib.IMAP4_SSL, email_id: str) -> bytes:
         EmailFetchError: If fetch fails
     """
     try:
-        status, msg_data = imap.fetch(email_id.encode(), "(RFC822)")
+        status, msg_data = imap.uid("FETCH", str(uid), "(RFC822)")
 
-        if status != "OK":
-            raise EmailFetchError(f"Failed to fetch email {email_id}")
+        if status != "OK" or not msg_data or msg_data[0] is None:
+            raise EmailFetchError(f"Failed to fetch email UID {uid}")
 
         raw_email = msg_data[0][1]
         return raw_email
 
+    except EmailFetchError:
+        raise
     except Exception as e:
-        logger.error(f"Failed to fetch email {email_id}: {e}")
+        logger.error(f"Failed to fetch email UID {uid}: {e}")
         raise EmailFetchError(f"Fetch failed: {str(e)}")
+
+
+def fetch_email_by_id(imap: imaplib.IMAP4_SSL, email_id: str) -> bytes:
+    """Deprecated alias for :func:`fetch_email_by_uid` (handles are UIDs now)."""
+    return fetch_email_by_uid(imap, email_id)
 
 
 def fetch_emails(
@@ -488,7 +654,9 @@ def fetch_emails(
     folder: str = "INBOX",
     criteria: str = "UNSEEN",
     limit: Optional[int] = None,
-    mark_as_read: bool = False
+    mark_as_read: bool = False,
+    exclude_gm_labels: Optional[List[str]] = None,
+    newest_first: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Main function to fetch and parse emails from inbox.
@@ -502,9 +670,11 @@ def fetch_emails(
         criteria: Search criteria (default: UNSEEN)
         limit: Maximum emails to fetch (None = all)
         mark_as_read: Mark emails as read after fetching
+        exclude_gm_labels: Gmail labels to exclude from the search
+        newest_first: process the newest mail first (default False)
 
     Returns:
-        List of parsed email dictionaries
+        List of parsed email dictionaries. ``email_id`` holds the message UID.
 
     Raises:
         EmailConnectionError: If connection fails
@@ -518,29 +688,33 @@ def fetch_emails(
         # Select folder
         select_folder(imap, folder)
 
-        # Search for emails
-        email_ids = search_emails(imap, criteria, limit)
+        # Search for emails (returns UIDs)
+        uids = search_emails(
+            imap, criteria, limit,
+            exclude_gm_labels=exclude_gm_labels,
+            newest_first=newest_first,
+        )
 
-        if not email_ids:
+        if not uids:
             logger.info("No emails found matching criteria")
             return []
 
         # Fetch and parse each email
         emails = []
-        for email_id in email_ids:
+        for uid in uids:
             try:
-                logger.info(f"Fetching email {email_id}")
-                raw_email = fetch_email_by_id(imap, email_id)
-                parsed_email = parse_email_message(raw_email, email_id)
+                logger.info(f"Fetching email UID {uid}")
+                raw_email = fetch_email_by_uid(imap, uid)
+                parsed_email = parse_email_message(raw_email, uid)
                 emails.append(parsed_email)
 
                 # Mark as read if requested
                 if mark_as_read:
-                    imap.store(email_id.encode(), '+FLAGS', '\\Seen')
-                    logger.info(f"Marked email {email_id} as read")
+                    imap.uid("STORE", uid, "+FLAGS", "(\\Seen)")
+                    logger.info(f"Marked email UID {uid} as read")
 
             except EmailFetchError as e:
-                logger.error(f"Skipping email {email_id}: {e}")
+                logger.error(f"Skipping email UID {uid}: {e}")
                 continue
 
         logger.info(f"Successfully fetched {len(emails)} emails")

@@ -76,6 +76,34 @@ This directive enables the email classification system to process real emails fr
 - Add custom label/flag
 - **IMPORTANT**: Only mark after successful classification
 
+### 7. Moving / Deleting Messages (Gmail)
+
+- **Track messages by UID, never by sequence number.** `search_emails()` returns
+  UIDs (`imap.uid('SEARCH', ...)`); `fetch_emails()` stores the UID in
+  `email_id`. Sequence numbers renumber on every expunge and are only valid
+  inside the connection that read them — the move step runs in a *separate,
+  later* connection.
+- **Re-resolve before mutating.** `move_emails()` / `delete_emails()` first take
+  a live snapshot of the target folder (`_resolve_folder_uids()`), verify each
+  handle is still present, and — if a UID has shifted — recover it via the
+  RFC 5322 `Message-ID`. Pass `id_to_message_id={uid: message_id}` so recovery
+  is possible.
+- **Organize by label, not by COPY + DELETE.** `move_emails()` applies the
+  destination label with `STORE +X-GM-LABELS`, then removes the source-folder
+  label (`\Inbox`, or the folder's own label) with `STORE -X-GM-LABELS`. The
+  destination label is applied *first*; if that fails the message is left where
+  it is and retried next run. No `COPY`, no `\Deleted`, no `expunge()` in this
+  path — it cannot permanently destroy mail.
+- **Hard deletes are UID-scoped.** `delete_emails()` (confirmed-spam purge only)
+  flags `\Deleted` on the resolved UIDs and calls `UID EXPUNGE` (RFC 4315) so
+  only those messages are expunged — never a blind `expunge()` on a mailbox a
+  human also works.
+- **Quote folder names.** Names with spaces (`"Spam Review"`, `"Needs Review"`)
+  must be quoted in `SELECT`/`STATUS` or Gmail returns
+  `BAD Could not parse command`.
+- **Process newest-first** for the INBOX pass (`newest_first=True`) so a backlog
+  never starves same-day mail.
+
 ## Edge Cases
 
 ### Connection Failures
@@ -112,10 +140,22 @@ This directive enables the email classification system to process real emails fr
   email collided with an old row and was silently dropped — the dashboard's
   email tables froze while Gmail sorting and Google Sheets kept working. Fixed
   by adding `emails.message_id` and keying on it.
+- **History (2026-09)**: The *move* step had the same root cause. It read
+  sequence numbers in one connection and, minutes later in another connection,
+  ran `COPY` + `\Deleted` + blind `expunge()` against those now-stale numbers.
+  Labels landed on unrelated messages, the classified messages never left the
+  inbox, and every 2-hourly run re-fetched them and smeared on another label —
+  the inbox backed up past 300 and same-day mail stopped being sorted. Fixed by
+  moving the whole fetch→move pipeline to UIDs, re-resolving via `Message-ID`,
+  and switching the organize path to label-only mutations (see step 7).
 
 ## Safety Constraints
 
-- **Never delete emails** - Only mark as read or move to folders
+- **Never delete emails in the organize path** - it mutates Gmail labels only
+  (`+X-GM-LABELS` / `-X-GM-LABELS`). The only hard delete is the confirmed-spam
+  purge in `delete_emails()`, and it is UID-scoped (`UID EXPUNGE`).
+- **Never blind-`expunge()`** - this mailbox is also operated by a human;
+  expunge only the specific UIDs you flagged.
 - **Never modify email content** - Preserve original for audit trail
 - **Always use SSL/TLS** - No plaintext connections
 - **Store credentials securely** - Use .env file, never hardcode
