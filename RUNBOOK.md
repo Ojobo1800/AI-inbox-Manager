@@ -1,346 +1,406 @@
-# InboxGenius — Operations Runbook
+# InboxGenius — Operations Runbook & Current Architecture
+
+> **This is the single source of truth for how the system is deployed and runs today.**
+> If you are an AI agent (or a new engineer) debugging a production issue, **read this
+> file first**, then run the checks in [§14 "Verify this doc is still current"](#14-verify-this-doc-is-still-current)
+> before trusting any older notes, chat history, or memory.
+>
+> **Last verified: 2026-09-08** — against live infra, the `master` branch, and a
+> manual `workflow_dispatch` run (GH Actions run 34238068620).
 
 ---
 
-## Project Completion Status: 100% ✅
+## 0. TL;DR — what changed from older docs
 
-All core features, cloud infrastructure, automation, and reporting are fully built and live.
+Earlier versions of this runbook (and stale chat sessions) describe infrastructure
+that **is no longer in use**. Current reality:
 
-| Area | Status |
-|------|--------|
-| Gmail email extraction & classification | ✅ Complete |
-| Automatic folder organization & spam deletion | ✅ Complete |
-| Student notification system | ✅ Complete |
-| Cloud scheduler (GitHub Actions, every 2 hours) | ✅ Complete |
-| Railway backend API (FastAPI + PostgreSQL) | ✅ Complete |
-| Vercel frontend dashboard | ✅ Complete |
-| Reports page (5 analytics tabs) | ✅ Complete |
-| Admin + Stakeholder login | ✅ Complete |
-| Auto-add new students | ✅ Complete |
-| Zero manual work required | ✅ Complete |
+| Thing | ❌ OLD (ignore) | ✅ CURRENT |
+|---|---|---|
+| Scheduler | Windows Task Scheduler on a laptop | **GitHub Actions cron**, cloud, laptop-independent |
+| Backend host | Railway | **Render** (Docker web service) |
+| Database | Railway PostgreSQL | **Neon PostgreSQL** (free tier, never expires) |
+| Backend URL | `inboxgenius-api-production.up.railway.app` | `https://ai-inbox-manager-5l6p.onrender.com` |
+| "Laptop must be on" | true | **false** — everything runs in the cloud |
+| Student notifications | auto-emailed by the cron | **draft → human approval** in the dashboard |
+| Classifier model | (unclear) | `gpt-4o-mini` (see [§11](#11-cost)) |
 
-**Deployment URLs**
-- Dashboard: https://ai-inbox-manager-vert.vercel.app
-- Backend API: https://inboxgenius-api-production.up.railway.app
-- Scheduler: https://github.com/Ojobo1800/AI-inbox-Manager/actions
+The frontend URL (`https://ai-inbox-manager-vert.vercel.app`) and the Gmail
+account (`c_interviews@colaberry.com`) are unchanged.
 
 ---
 
-## System Overview
+## 1. Live URLs & accounts
 
-| Component | What it does | Where |
-|-----------|-------------|-------|
-| `execution/process_inbox_auto.py` | Fetches Gmail, classifies emails via GPT, moves to folders, writes to Railway DB | Every **2 hours** via Windows Task Scheduler (local) |
-| `services/dashboard/api/` | FastAPI backend — serves stats, runs, settings | **Railway**: `inboxgenius-api-production.up.railway.app` / local port **8000** |
-| `services/dashboard/frontend/` | React dashboard — shows stats, charts, countdown | **Vercel**: `ai-inbox-manager-vert.vercel.app` / local port **5173** |
-| `inboxgenius-db` | PostgreSQL database — stores all ProcessRun records | **Railway** (shared between local scheduler and cloud API) |
+| Component | URL / location |
+|---|---|
+| **Dashboard (frontend)** | https://ai-inbox-manager-vert.vercel.app — Vercel, auto-deploys from `master` |
+| **Backend API** | https://ai-inbox-manager-5l6p.onrender.com — Render Docker web service `inboxgenius-api` |
+| **API health** | https://ai-inbox-manager-5l6p.onrender.com/health → `{"status":"healthy","database":"connected"}` |
+| **API docs (OpenAPI)** | https://ai-inbox-manager-5l6p.onrender.com/docs |
+| **Database** | Neon PostgreSQL — host `ep-super-shadow-aqsoxad0.c-8.us-east-1.aws.neon.tech`, db `neondb` |
+| **Scheduler / CI** | https://github.com/Ojobo1800/AI-inbox-Manager/actions |
+| **Git repo** | https://github.com/Ojobo1800/AI-inbox-Manager (branch: `master`) |
+| **Monitored mailbox** | `c_interviews@colaberry.com` (Gmail, IMAP + SMTP) |
+| **Google Sheet audit log** | id in `GOOGLE_SHEET_ID` secret |
 
-**Log locations**
-
-| Log | Path |
-|-----|------|
-| Processing runs | `logs/inbox_auto_YYYYMMDD.log` |
-| Failure alerts | `logs/alerts.log` |
-| Tmp output / summaries | `tmp/auto_process_YYYYMMDD_HHMMSS/summary.json` |
-| Local Dashboard DB | `services/dashboard/api/email_dashboard.db` (backup only) |
-| Cloud Dashboard DB | Railway PostgreSQL — `inboxgenius-db` service |
+**Dashboard logins:** `admin` / `admin123` (full), stakeholder account view-only.
+Passwords are bcrypt hashes in Render env vars `ADMIN_PASSWORD_HASH` /
+`STAKEHOLDER_PASSWORD_HASH`.
 
 ---
 
-## Restart Instructions
+## 2. Architecture (Agent-First, Deterministic-Execution — see `CLAUDE.md`)
 
-### Backend API
+```
+Layer 1  /directives          Human-readable SOPs. Claude reads before acting.
+Layer 2  Claude / engineer    Plans & edits. Never runs business logic itself.
+Layer 3  /execution           Deterministic Python scripts — the actual work.
+         .github/workflows     "The worker": GH Actions runs Layer 3 on a schedule.
+Dashboard services/dashboard   React (Vercel) + FastAPI (Render) + Neon, read-mostly view.
+```
+
+The **cron running `execution/process_inbox_auto.py` every 2 h is the production
+system.** The dashboard only *reads* what that script writes (plus a human
+approval queue for student notifications).
+
+---
+
+## 3. The processing pipeline — what one run does
+
+Entry point: `python execution/process_inbox_auto.py`
+(function `process_unread_emails()` in that file).
+
+1. **Acquire run-lock** (`execution/run_lock.py`, lock at `tmp/process.lock`) — no
+   overlapping runs.
+2. **Spam-review 2nd pass** (`_run_spam_review_pass`): fetch everything in the
+   `Spam Review` Gmail folder (≤50), re-classify each:
+   - still `Other` / confidence < 0.70 / flagged spam → **permanently deleted**
+     (`delete_emails`, UID-scoped `UID EXPUNGE`)
+   - turns out legit → **rescued** to its real category folder
+3. **Fetch INBOX**: `UNSEEN` only, **newest-first**, capped at
+   `MAX_EMAILS_PER_RUN` (default **100**). Handles are **IMAP UIDs**.
+4. **Pre-run budget check**: abort before any API call if
+   `len(emails) × ~$0.015 > MAX_COST_PER_RUN_USD` (default `5.0`).
+   ⚠️ that per-email estimate uses gpt-4o pricing but the model is gpt-4o-mini —
+   it over-estimates ~17× (see [§15](#15-known-issues--deferred-work)).
+5. **Classify** (16 parallel workers):
+   - `pre_classify_by_sender()` — deterministic sender-domain rules, **no AI call**
+     for obvious senders (LinkedIn, Indeed, etc.)
+   - else `classify_email()` → OpenAI **`gpt-4o-mini`** → category + confidence +
+     extracted fields + edge-case flags
+6. **Post-classification cost check**: if actual token cost > limit, DB writes
+   still happen but **all Gmail moves/deletes are skipped** this run.
+7. **Apply actions** (sequential) per email:
+   - **Genuine interview request** OR **sender/company in `KNOWN_INTERVIEW_COMPANIES`**
+     → **kept in INBOX, untouched**. Imported to DB; `process_interview_email()`
+     runs: sub-classify → create `InterviewEvent` → resolve student from
+     `config/students.py` → create a **`NotificationDraft`** (NOT auto-sent).
+   - **`Other`** → quarantine: apply label `Spam Review`, remove from inbox,
+     import to DB.
+   - **Everything else** → organize: `CATEGORY_TO_FOLDER` map; if confidence <
+     `ROUTING_CONFIDENCE_THRESHOLD` (0.70) or category unmapped → `Needs Review`;
+     else the mapped folder.
+8. **Move** (`fetch_emails.move_emails`): for each message, `STORE +X-GM-LABELS
+   "<folder>"` then `STORE -X-GM-LABELS \Inbox`, addressed by **UID**, with
+   **Message-ID re-resolution** if a UID has shifted. No COPY / `\Deleted` /
+   `expunge()` in this path — it cannot delete mail.
+9. **Google Sheets** audit log (filtered subset of categories).
+10. **SharePoint** audit log (if configured; usually a no-op).
+11. **`ProcessRun`** row written to Neon; `summary.json` saved under
+    `tmp/auto_process_<ts>/`; logs uploaded as a GH Actions artifact
+    (`inbox-logs-<run#>`, 7-day retention).
+12. On fatal error: `send_failure_alert()` emails `ALERT_EMAIL_TO`. Script always
+    `sys.exit(0)` so the scheduler reports success.
+
+**Categories → Gmail folders/labels:** see `CATEGORY_TO_FOLDER` in
+`execution/process_inbox_auto.py` (~line 584). All flat label names.
+**Confidence threshold:** `ROUTING_CONFIDENCE_THRESHOLD = 0.70`.
+
+---
+
+## 4. Scheduling & GitHub Actions workflows
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `.github/workflows/process_inbox.yml` | cron `0 */2 * * *` (every 2 h UTC) + manual `workflow_dispatch` | Installs deps, writes `.env` + `config/*.json` from secrets, runs `process_inbox_auto.py`, refreshes the `GMAIL_TOKEN_JSON` secret with the rotated token, uploads logs. `timeout-minutes: 30`. |
+| `.github/workflows/keepalive.yml` | cron `17 6 * * 1` (Mon 06:17 UTC) + manual | Pushes one empty `chore: keepalive [skip ci]` commit/week so GitHub never auto-disables the cron (it did on ~2026-08-25 after 60 days idle). |
+| `.github/workflows/deploy_backend.yml` | push to `master` touching `services/dashboard/api/**`, `execution/**`, or `config/**` + manual | `curl`s the Render deploy hook (`RENDER_DEPLOY_HOOK_URL` secret). |
+
+**Frontend deploy:** Vercel watches `master` and rebuilds
+`services/dashboard/frontend/` automatically. Prod API URL is baked in via
+`services/dashboard/frontend/.env.production`
+(`VITE_API_BASE_URL=https://ai-inbox-manager-5l6p.onrender.com`).
+
+**Local Windows Task Scheduler** job `ColaberryEmailProcessing` — **DISABLED on
+purpose.** Re-enable only if the cloud cron dies. `InboxAI_StartAPI_OnLogon`
+(starts a local API on logon) is harmless and still active.
+
+---
+
+## 5. Data stores
+
+| Store | Holds | Notes |
+|---|---|---|
+| **Gmail labels/folders** | the actual sorted result the assistant sees | source of truth for "where is this email" |
+| **Neon PostgreSQL** (`neondb`) | `emails`, `classifications`, `process_runs`, `interview_events`, `notification_drafts`, `students`, approvals, checklist… | powers the dashboard. Dedup key = RFC 5322 `Message-ID` (`emails.message_id` UNIQUE). `_ensure_schema()` in `process_inbox_auto.py` auto-migrates on run. |
+| **Google Sheet** | flat human-readable audit log | filtered; failures are non-blocking |
+| **GH Actions artifacts** | per-run `logs/` | 7-day retention |
+| `tmp/auto_process_<ts>/summary.json` | per-run stats | local/CI only, disposable |
+
+**Connection string** lives in the `DATABASE_URL` GitHub secret (processing) and
+the `DATABASE_URL` Render env var (API). Both point at the same Neon external URL
+(`...neon.tech/neondb?sslmode=require`).
+
+---
+
+## 6. Frontend UI
+
+`services/dashboard/frontend/` — **React 18 + TypeScript + Vite 5**, routing via
+`react-router-dom` 6, charts via `recharts`, HTTP via `axios`
+(`src/api/client.ts`, base URL from `VITE_API_BASE_URL`). Cookie-session auth
+(`/api/auth/login` sets a cookie; there is no bearer token).
+
+| Route | Page component | Purpose |
+|---|---|---|
+| `/login` | `LoginPage.tsx` | admin / stakeholder login |
+| `/` | `DashboardPage.tsx` | stats, category chart, volume trends, countdown to next interview |
+| `/interviews` | `InterviewsPage.tsx` | interview requests & events |
+| `/interview-events` | `InterviewEventsReportPage.tsx` | interview-events report |
+| `/reports` | `ReportsPage.tsx` | analytics tabs (accuracy, categories, hourly volume, company tracker, engineering KPIs) |
+| `/review` | `ReviewPage.tsx` | `Needs Review` queue + pending **notification drafts** to approve/edit/reject |
+| `/settings` | `SettingsPage.tsx` | schedule config, thresholds |
+
+Shared shell: `components/Layout.tsx`. Other components: `ApprovalsContent`,
+`InboxContent`, `InterviewChecklist`, `CountdownTimer`, `ErrorBoundary`.
+
+---
+
+## 7. Backend API
+
+`services/dashboard/api/` — **FastAPI**, `uvicorn main:app`, Python 3.11,
+SQLAlchemy 2 + `psycopg2` → Neon. Deployed as a Render Docker web service
+(`Dockerfile.prod`, non-root, healthcheck on `/health`, port 8000 → Render `$PORT`).
+`render.yaml` documents the service; env vars with `sync: false` are set by hand
+in the Render dashboard.
+
+Routers (all under `/api`, see `main.py`): `auth`, `approvals`, `inbox`, `stats`,
+`whitelist`, `emails`, `interviews`, `notifications`, `checklist`, `schedule`.
+CORS `allow_origins` = `CORS_ORIGINS` env var (must exactly match the Vercel URL,
+no trailing slash).
+
+> **Manual move/delete from the dashboard is disabled in the cloud** —
+> `services/dashboard/api/integration/email_actions.py` catches the missing IMAP
+> libs and raises "IMAP actions not available in cloud deployment". All Gmail
+> mutation happens in the cron.
+
+---
+
+## 8. Secrets & credentials
+
+**Nothing secret is committed.** `.gitignore` covers `.env`, `config/gmail_token.json`,
+`config/gmail_credentials.json`, `config/service-account-key.json`, `*.db`, `logs/`.
+
+### GitHub repo secrets (`Ojobo1800/AI-inbox-Manager` → Settings → Secrets → Actions)
+`DATABASE_URL`, `EMAIL_ADDRESS`, `EMAIL_PASSWORD`, `EMAIL_SERVER`, `EMAIL_PORT`,
+`OPENAI_API_KEY`, `SMTP_APP_PASSWORD`, `ALERT_EMAIL_TO`, `GOOGLE_SHEET_ID`,
+`GMAIL_TOKEN_JSON` (base64, auto-refreshed each run), `GMAIL_CREDENTIALS_JSON`
+(base64), `SERVICE_ACCOUNT_KEY_JSON` (base64), `RENDER_DEPLOY_HOOK_URL`,
+`PAT_FOR_SECRETS` (PAT used to write `GMAIL_TOKEN_JSON` back).
+`gh secret list` to enumerate.
+
+### Render env vars (`inboxgenius-api` → Environment)
+`DATABASE_URL`, `ENVIRONMENT=production`, `SESSION_SECRET`, `ADMIN_PASSWORD_HASH`,
+`STAKEHOLDER_PASSWORD_HASH`, `CORS_ORIGINS`, `EMAIL_ADDRESS`, `EMAIL_PASSWORD`,
+`OPENAI_API_KEY`.
+
+### Rotation
+
+- **OpenAI key** — new key at platform.openai.com → update `OPENAI_API_KEY` in
+  **both** the GitHub secret and the Render env var. (Charges bill to whichever
+  OpenAI account owns the key — not necessarily the GitHub owner.)
+- **Gmail OAuth** (`config/gmail_token.json`) — auto-refreshes via the stored
+  refresh token; the cron writes the refreshed token back to `GMAIL_TOKEN_JSON`.
+  Full re-auth only if Google revokes: `python scripts/authorize_gmail.py`, sign
+  in as `c_interviews@colaberry.com`, then base64 the new
+  `config/gmail_token.json` into the `GMAIL_TOKEN_JSON` secret.
+- **DB** — rotate in Neon console, update `DATABASE_URL` in the GitHub secret and
+  the Render env var.
+- **Dashboard password** — `python -c "from services.dashboard.api.auth import
+  hash_password; print(hash_password('newpw'))"` → paste hash into the Render env
+  var → Render redeploys.
+
+---
+
+## 9. Safety mechanisms
+
+- **Run-lock** — `tmp/process.lock`, no concurrent runs.
+- **Known-interview-company protection** — `KNOWN_INTERVIEW_COMPANIES` set; a
+  match on company / sender / subject forces "keep in INBOX" even if the AI
+  misclassifies.
+- **Confidence gate** — < 0.70 routes to `Needs Review`, never the target folder.
+- **Two-pass spam** — `Other` is quarantined in `Spam Review`, only deleted after
+  a second AI confirmation on the next run.
+- **Cost guardrails** — pre-run estimate abort + post-run actual-cost skip of
+  Gmail mutations. Env: `MAX_COST_PER_RUN_USD` (default 5.0).
+- **Batch ceiling** — `MAX_EMAILS_PER_RUN` (default 100).
+- **Label-only organize path** — cannot permanently delete mail; the only hard
+  delete is the confirmed-spam purge, and it is UID-scoped (`UID EXPUNGE`), never
+  a blind `expunge()`.
+- **UID + Message-ID addressing** — moves/deletes can't hit the wrong message
+  when sequence numbers shift (see changelog 2026-09-08).
+- **Failure alerts** — `send_failure_alert()` → `ALERT_EMAIL_TO` on fatal errors
+  / cost aborts.
+
+---
+
+## 10. Common operations
+
 ```bash
-cd services/dashboard/api
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-Verify: http://localhost:8000/health → `{"status":"healthy"}`
+# --- Trigger a processing run now (instead of waiting for the 2h cron) ---
+gh workflow run process_inbox.yml --ref master
+gh run watch $(gh run list --workflow=process_inbox.yml -L1 --json databaseId -q '.[0].databaseId')
 
-### Frontend
+# --- Inspect the last runs / a run's log ---
+gh run list --workflow=process_inbox.yml -L 10
+gh run view <run-id> --log | grep -E "PROCESSING SUMMARY|Total Processed|Organized|Quarantined|Spam Review pass|Successfully moved|ERROR"
+
+# --- Backend health ---
+curl -s https://ai-inbox-manager-5l6p.onrender.com/health
+
+# --- Deploy backend manually ---
+gh workflow run deploy_backend.yml --ref master     # or: curl -X POST "$RENDER_DEPLOY_HOOK_URL"
+
+# --- Run the test suite (315 tests) ---
+python -m pytest -q                                 # or: scripts/test.sh  /  scripts\test.bat
+
+# --- Local dev ---
+#   backend:  cd services/dashboard/api && uvicorn main:app --port 8000
+#   frontend: cd services/dashboard/frontend && npm run dev   (http://localhost:5173)
+#   one processing run locally (needs root .env): python execution/process_inbox_auto.py --limit 10
+
+# --- Lock recovery (only relevant for local runs) ---
+cat tmp/process.lock            # PID + timestamp
+rm tmp/process.lock             # if the PID is dead / lock > 3h old
+```
+
+---
+
+## 11. Cost
+
+- Model: **`gpt-4o-mini`** (`execution/classify_email.py`, `call_claude_api`
+  default; `classify_email()` does not override it).
+- Deterministic `pre_classify_by_sender()` skips the API entirely for many
+  emails.
+- Real spend ≈ **$0.10–0.15 per run** (~800k input + ~15k output tokens at
+  gpt-4o-mini rates) → **~$1.50–2.00/day** across 12 runs.
+- The **`estimated cost: $X` line in the logs over-states this ~17×** because
+  `_compute_cost()` in `process_inbox_auto.py` hard-codes gpt-4o pricing
+  ($2.50 / $10 per M) instead of gpt-4o-mini ($0.15 / $0.60 per M). Safe (fails
+  toward aborting), but misleading — see [§15](#15-known-issues--deferred-work).
+- Charges bill to the OpenAI account that owns the key in the `OPENAI_API_KEY`
+  secret. Verify the account at platform.openai.com → Billing/Usage.
+
+---
+
+## 12. Failure playbook
+
+| Symptom | First checks |
+|---|---|
+| **Dashboard shows no / stale data** | `curl .../health` → is `database` `connected`? Is Render awake (cold start ≈ 20 s)? `gh run list` — are cron runs green? Check a run log for `Dashboard ProcessRun record created`. |
+| **Emails not being sorted** | `gh run view <id> --log` → look for `Successfully moved N of N`, `Move: … skipping`, `BAD Could not parse command`. Check `Total Processed` vs inbox size. Confirm `EMAIL_PASSWORD` / Gmail OAuth still valid (`AUTHENTICATE failed` / `invalid_grant`). |
+| **Cron not running at all** | GH Actions → is "Process Inbox" **disabled**? (re-enable; keepalive should prevent this). Check `keepalive` ran in the last week. |
+| **Cost guardrail aborting** | Log shows `COST GUARDRAIL`. Real cost is ~17× lower than the estimate — usually safe to raise `MAX_COST_PER_RUN_USD` (GitHub secret / `.env`) or reduce inbox backlog. Fixing [§15](#15-known-issues--deferred-work) removes the false alarm. |
+| **OpenAI errors** | status.openai.com for outage. `401` → rotate key ([§8](#8-secrets--credentials)). `429` → lower `MAX_EMAILS_PER_RUN`. Affected emails stay UNSEEN for next run. |
+| **Gmail OAuth expired** | `python scripts/authorize_gmail.py` → re-base64 into `GMAIL_TOKEN_JSON`. SMTP alerts also fail during this window. |
+| **Backend deploy failed** | GH Actions `Deploy Backend to Render` log; Render dashboard → `inboxgenius-api` → Events / Logs. |
+| **Run crashed, lock stuck (local only)** | `rm tmp/process.lock` if PID dead or > 3 h old. |
+| **`Spam Review` / `Needs Review` errors** | folder names must be quoted in IMAP — `_quote_folder()` in `fetch_emails.py` handles this; if it regresses you'll see `BAD Could not parse command`. |
+
+---
+
+## 13. Directives (Layer 1 SOPs)
+
+`directives/email-integration.md` — IMAP fetch/move/delete rules (UID handling,
+label ops, folder quoting — **step 7 is the authority on the move pipeline**).
+`directives/email-classification.md` — categories & classification rules.
+`directives/interview-processing.md` — interview sub-classification & notifications.
+
+---
+
+## 14. Verify this doc is still current
+
+Run these; if any disagree with the above, **the doc is stale — update it**:
+
 ```bash
-cd services/dashboard/frontend
-npm run dev
-```
-Access: http://localhost:5173  Login: `admin` / `admin123`
+# Backend host & DB (expect onrender.com + "database":"connected")
+curl -s https://ai-inbox-manager-5l6p.onrender.com/health
 
-### Scheduled Task (Windows Task Scheduler)
-1. Open **Task Scheduler** → Task Scheduler Library
-2. Find task: **"InboxGenius Auto Process"** (or similar)
-3. Right-click → **Run** to trigger immediately, or **Enable** if disabled
-4. Script invoked: `python execution/process_inbox_auto.py`
-5. Task interval: every 2 hours, starting from last run time
+# Scheduler is the GH Actions cron, running & green
+gh run list --workflow=process_inbox.yml -L 3
 
----
+# Production entrypoint is still process_inbox_auto.py
+grep -n "process_inbox_auto.py" .github/workflows/process_inbox.yml
 
-## Lock Recovery
+# Classifier model
+grep -n 'model: str = ' execution/classify_email.py
 
-**Lock file:** `tmp/process.lock`
+# DB target (expect a neon.tech URL in the secret; can't print value, but:)
+gh secret list | grep DATABASE_URL
 
-The lock prevents overlapping runs. It is written at startup and deleted on clean exit.
-
-**When to delete it:**
-- A run crashed mid-flight (check `logs/inbox_auto_YYYYMMDD.log` for FATAL or traceback)
-- Task Scheduler shows the task as "Running" but no Python process is active
-- Lock is more than 3 hours old
-
-```bash
-# Check lock contents (PID + timestamp)
-cat tmp/process.lock
-
-# Verify the PID is not a live process (Windows)
-tasklist | findstr <PID>
-
-# If process is dead, delete the lock
-del tmp\process.lock
+# Frontend prod API URL
+cat services/dashboard/frontend/.env.production
 ```
 
----
-
-## Credential Rotation
-
-### OpenAI API Key
-1. Go to https://platform.openai.com/api-keys → create new key
-2. Open `.env` in project root
-3. Replace `OPENAI_API_KEY=sk-proj-...` with the new key
-4. No restart needed — key is read fresh each run
-
-### Gmail OAuth Token (`config/gmail_token.json`)
-The token auto-refreshes using the stored refresh token. Manual rotation is only needed if access is fully revoked.
-
-1. Delete `config/gmail_token.json`
-2. Run: `python execution/gmail_auth.py`
-3. A browser window opens — sign in as `c_interviews@colaberry.com` and grant access
-4. New `gmail_token.json` is written automatically
-5. Verify: `python -c "from execution.gmail_auth import get_access_token; print(get_access_token()[:20])"`
-
-### Google Sheets Service Account (`config/service-account-key.json`)
-1. Google Cloud Console → IAM & Admin → Service Accounts
-2. Select `inboxgenius-sheets@ai-inbox-manager-agent.iam.gserviceaccount.com`
-3. Keys → Add Key → JSON → download
-4. Replace `config/service-account-key.json` with the new file
-5. Ensure the sheet `183B555Fg3ghmqvZPJLGM2O3vGYLrXCDXXcAcSqe3F9M` is still shared with the service account email
+**Known stale files still in the repo (do not treat as current):**
+`services/dashboard/api/railway.json`, `services/dashboard/README.md`,
+`services/dashboard/QUICKSTART.md`, `services/dashboard/FULLSTACK_QUICKSTART.md`,
+and the `# Railway…` comments in `services/dashboard/api/database.py` (the
+`postgres://` → `postgresql://` normalization there is still valid). Deployment
+config that *is* live: `render.yaml` + `services/dashboard/api/Dockerfile.prod`.
 
 ---
 
-## Failure Playbook
+## 15. Known issues & deferred work
 
-### Cost Guardrail Triggers Repeatedly
-**Symptom:** Alerts with subject `[InboxGenius] Run aborted — cost guardrail` or `Cost guardrail triggered — Gmail moves SKIPPED`
-
-1. Check `logs/inbox_auto_YYYYMMDD.log` for the estimated/actual cost values
-2. Open `.env` → adjust `COST_GUARDRAIL_USD` upward if the inbox is legitimately larger
-3. If a large spam batch caused it: manually clear the inbox first, then re-enable
-4. Check OpenAI usage dashboard for unexpected spikes — could indicate a prompt regression
-
-### OpenAI Fails Continuously
-**Symptom:** Log shows repeated `GPT classification failed` or HTTP 429/500 errors
-
-1. Check https://status.openai.com for an outage — if so, wait and Task Scheduler retries in 2 hours
-2. If 429 (rate limit): reduce `EMAIL_BATCH_SIZE` in the dashboard Settings page (default: 50 → try 20)
-3. If 401 (invalid key): rotate OpenAI key (see above)
-4. Classifications will be skipped for affected emails — they remain in INBOX for the next run
-
-### Gmail OAuth Expires / IMAP Access Fails
-**Symptom:** Log shows `AUTHENTICATE failed` or `invalid_grant` in the OAuth flow
-
-1. Check if Google forced a token revocation (password change, security event, or > 6 months inactive)
-2. Rotate the Gmail OAuth token (see above)
-3. If revocation was due to a policy change, re-authorise the OAuth app in Google Cloud Console
-4. SMTP alert sending will also fail during this window — check `logs/alerts.log` for the fallback record
-
-### Dashboard Shows No Data
-**Symptom:** Stats are all zero or "No data" charts on cloud dashboard
-
-1. Confirm Railway backend is running: `curl https://inboxgenius-api-production.up.railway.app/health`
-2. Confirm `DATABASE_URL` in `.env` points to Railway PostgreSQL (not local SQLite)
-3. Trigger a manual run: right-click Task Scheduler task → **Run** — check logs for `Dashboard ProcessRun record created`
-4. If Railway DB is empty, run the migration script:
-   ```bash
-   # From project root — copies all local ProcessRun records to Railway
-   python -c "
-   import sys; sys.path.insert(0, 'services/dashboard/api')
-   from sqlalchemy import create_engine
-   from sqlalchemy.orm import sessionmaker
-   from models import ProcessRun
-   local_db = sessionmaker(bind=create_engine('sqlite:///services/dashboard/api/email_dashboard.db'))()
-   remote_db = sessionmaker(bind=create_engine('postgresql://postgres:yqtPrlHdOjxcYIIfznlSqBqYkAlVJXbu@centerbeam.proxy.rlwy.net:56433/railway'))()
-   existing = {r.run_timestamp for r in remote_db.query(ProcessRun).all()}
-   added = 0
-   for r in local_db.query(ProcessRun).all():
-       if r.run_timestamp not in existing:
-           remote_db.add(ProcessRun(run_timestamp=r.run_timestamp, total_emails=r.total_emails, interview_requests=r.interview_requests, organized=r.organized, spam_deleted=r.spam_deleted, categories_breakdown=r.categories_breakdown, duration_seconds=r.duration_seconds, status=r.status))
-           added += 1
-   remote_db.commit()
-   print(f'Migrated {added} records')
-   "
-   ```
+- **Cost estimate is ~17× too high.** `_compute_cost()` /
+  `_EST_COST_PER_EMAIL_USD` in `process_inbox_auto.py` use gpt-4o pricing while
+  the model is gpt-4o-mini. Fix: use gpt-4o-mini rates ($0.15 / $0.60 per M) or
+  read the model from one constant. Low risk, avoids false cost-guardrail aborts.
+- **Interview / known-company emails are re-classified every run.** They're kept
+  UNSEEN in INBOX on purpose, so each 2 h run re-fetches and re-classifies them.
+  Deferred fix: stamp a durable `InboxGenius-Processed` Gmail label and exclude
+  it from the fetch search (`fetch_emails.search_emails` already accepts
+  `exclude_gm_labels`, just not wired to the caller).
+- **`email_actions.delete_email()` defaults `folder="INBOX"`** — a dashboard
+  delete of a non-inbox email now safely no-ops with a warning (previously could
+  hit the wrong message). Pass the real folder if this path is ever re-enabled.
+- **The mislabelled backlog from the Sept 2026 incident** keeps its junk labels
+  in Gmail; the fix stopped new damage but didn't retro-clean. A one-off
+  label-stripping script can be written if needed.
 
 ---
 
----
+## 16. Changelog (infra / architecture only)
 
-## Dashboard Logins
-
-**Cloud URL (stakeholder access):** https://ai-inbox-manager-vert.vercel.app
-**Local URL (admin):** http://localhost:5173
-
-| Role | Username | Password | Access |
-|------|----------|----------|--------|
-| Admin | `admin` | `admin123` | Full access |
-| Stakeholder | any (e.g. `stakeholder`) | `stakeholder123` | View-only |
-
-To change a password in **cloud (Railway)**:
-1. Generate new hash: `python -c "from services.dashboard.api.auth import hash_password; print(hash_password('newpassword'))"`
-2. Go to Railway → **inboxgenius-api** → **Variables** → **Raw Editor**
-3. Update `ADMIN_PASSWORD_HASH` or `STAKEHOLDER_PASSWORD_HASH` on a **single line** (no line breaks)
-4. Save — Railway redeploys automatically
-
-To change a password **locally**:
-1. Generate hash as above
-2. Open `services/dashboard/api/.env`
-3. Replace the relevant hash value
-4. Restart the backend
+- **2026-09-08** — Move/delete pipeline switched from IMAP sequence numbers to
+  **UIDs + Gmail label ops** (`+X-GM-LABELS` / `-X-GM-LABELS \Inbox`), with
+  Message-ID re-resolution and UID-scoped spam expunge. Folder names quoted in
+  `SELECT` (revived the long-dead spam-review 2nd pass). Newest-first INBOX
+  fetch. Root cause: stale sequence numbers across two connections →
+  wrong labels, mail stuck in Inbox, 300+ backlog. Commit on `master`; tests in
+  `tests/execution/test_fetch_emails.py`. Full rewrite of this runbook.
+- **2026-08-31** — `emails.message_id` UNIQUE column; DB dedup keyed on
+  `Message-ID` not sequence number (fixed the 2026-06-29 → 08-31 dashboard
+  freeze). `keepalive.yml` added. Cron re-enabled after 60-day auto-disable.
+  `DATABASE_URL` GitHub secret corrected from Railway → Neon.
+- **2026-06-03** — Migrated backend Render + DB **Railway → Neon**
+  (Render's free PostgreSQL expired). Backend moved to Render Docker.
+- **2026-06-27** — Two-pass Spam Review system added.
+- (pre-2026-06) — Railway backend + Windows Task Scheduler era. **Deprecated.**
 
 ---
 
-## Processing Performance Settings
-
-Current settings (optimised 2026-03-22):
-
-| Setting | Value | File |
-|---------|-------|------|
-| GPT Model | `gpt-4o-mini` | `execution/classify_email.py` |
-| Max tokens | `800` | `execution/classify_email.py` |
-| Parallel workers | `16` | `execution/process_inbox_auto.py` |
-| Batch size (fetch limit) | `MAX_EMAILS_PER_RUN` env var (default 100) | `.env` |
-
-Expected run duration: **~30–60 seconds** per batch of 50 emails.
-
-### Clear Email Backlog Manually
-If unread emails pile up (e.g. after system downtime):
-```bash
-cd "C:\Users\lhc22\OneDrive\Desktop\AI_Ibox_Genuis_Manager\Colaberry_InboxGenius-main"
-python tmp/clear_backlog.py
-```
-Runs batches of 50 until inbox is empty. Press `Ctrl+C` to stop safely at any time.
-
----
-
-## Git & GitHub
-
-**Repository:** https://github.com/Ojobo1800/AI-inbox-Manager
-
-### Commit and Push Changes
-Run from the project root:
-```bash
-cd "C:\Users\lhc22\OneDrive\Desktop\AI_Ibox_Genuis_Manager\Colaberry_InboxGenius-main"
-git add .
-git commit -m "your message here"
-git push
-```
-
-### Check What Has Changed (before committing)
-```bash
-git status
-git diff
-```
-
-### View Commit History
-```bash
-git log --oneline -10
-```
-
-### Files Never Committed (secrets — protected by .gitignore)
-- `config/gmail_token.json`
-- `config/gmail_credentials.json`
-- `config/service-account-key.json`
-- `.env`
-- `*.db` (database files)
-- `logs/` (log files)
-
----
-
-## Cloud Deployment (Railway + Vercel)
-
-| Service | Platform | URL |
-|---------|----------|-----|
-| Frontend | Vercel | https://ai-inbox-manager-vert.vercel.app |
-| Backend API | Railway | https://inboxgenius-api-production.up.railway.app |
-| PostgreSQL DB | Railway | `inboxgenius-db` service |
-
-### Key Railway Environment Variables (inboxgenius-api)
-| Variable | Purpose |
-|----------|---------|
-| `ADMIN_PASSWORD_HASH` | bcrypt hash of admin password |
-| `STAKEHOLDER_PASSWORD_HASH` | bcrypt hash of stakeholder password |
-| `CORS_ORIGINS` | Must match Vercel frontend URL exactly (no trailing slash) |
-| `DATABASE_PUBLIC_URL` | Auto-set by Railway — PostgreSQL connection string |
-| `SESSION_SECRET` | Random secret for session tokens |
-| `ENVIRONMENT` | Set to `production` |
-
-### How Live Data Flows
-1. Windows Task Scheduler runs `process_inbox_auto.py` every 2 hours
-2. Script reads `DATABASE_URL` from `.env` → writes ProcessRun to **Railway PostgreSQL**
-3. Stakeholder opens Vercel URL → frontend calls Railway API → reads from Railway PostgreSQL
-4. Dashboard updates automatically after each scheduler run
-
-> **Note:** Laptop must be on for data to flow. Processing does not run on Railway.
-
----
-
-## Student Email Notifications
-
-When an Interview Request is detected, the system automatically sends an email notification to the student.
-
-### How It Works
-1. GPT classifies incoming email as **Interview Request** and extracts the student name + company
-2. System looks up the student in `config/students.py` by name
-3. Sends notification email to the student's personal email
-4. Email is signed by the student's assigned assistant (Karthik or Vivek)
-5. Shemika (`mika@colaberry.com`) and Jackie (`jackie@colaberry.com`) are always BCC'd
-
-### Email Sending
-- **Sent from:** `c_interviews@colaberry.com` (Option A — shared inbox)
-- **Signed as:** Karthik or Vivek depending on student assignment
-- **BCC:** Shemika + Jackie on every notification
-
-### Student Assignments
-| Assistant | Email | Students Assigned |
-|-----------|-------|------------------|
-| Karthik Pairala | karthik@colaberry.com | Sarbjit, Ephrem, Terri, Yannick, Aisha, Mequanint, Kesetebirhan, Betty, Jeanne |
-| Vivek Burra | vivek@colaberry.com | Eyerusalem, Hemambika, Siddhatapa, Kwadjossan, Osarumwense, Senayit, Rutendo, Allan, Abdulheli |
-
-### Auto-Adding New Students
-If an interview request arrives for a student not in `config/students.py`, the system will:
-1. Extract the student's name from the email (via GPT or body parsing)
-2. Extract their email from forwarding headers or CC fields
-3. Auto-add them to `config/students.py` with **Karthik as default** assigned assistant
-4. Send the notification immediately
-
-The new student is saved permanently — future emails will find them automatically.
-
-To change their assigned assistant after auto-add, open `config/students.py` and update `assigned_to` and `assistant_email`:
-```python
-{"name": "New Student", "personal_email": "student@email.com", "phone": "",
- "assigned_to": "Vivek", "assistant_email": "vivek@colaberry.com"}
-```
-
-### Adding or Updating Students Manually
-Edit `config/students.py` — each entry has:
-```python
-{"name": "Full Name", "personal_email": "email@example.com", "phone": "1234567890",
- "assigned_to": "Karthik", "assistant_email": "karthik@colaberry.com"}
-```
-No restart needed — file is read fresh on each processing run.
-
-### Notification Failure Troubleshooting
-**Symptom:** Log shows `[NOTIFICATION SKIPPED: Student name could not be extracted from email]`
-- GPT could not extract a student name from the email body
-- Check the email manually and add the student to `config/students.py` if needed
-
-**Symptom:** Log shows `[NOTIFICATION FAILED: SMTP authentication failed]`
-- Gmail OAuth token may have expired — rotate using steps in **Credential Rotation** section above
-
----
-
-*Last updated: 2026-03-28 (auto-add students) | Maintained by: Colaberry InboxGenius team*
+*Maintained by: Colaberry InboxGenius team. When you change hosting, the
+pipeline, secrets, or the frontend stack, update this file in the same commit
+(`CLAUDE.md` requires it).*

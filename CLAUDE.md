@@ -8,6 +8,22 @@ Claude Code and other coding agents are used to **build and maintain** the syste
 
 ---
 
+## ⚠️ Read `RUNBOOK.md` first
+
+**Before debugging any production issue, deploy question, or "what is the current
+setup" question — read [`RUNBOOK.md`](RUNBOOK.md).** It is the single source of
+truth for live infrastructure (hosting, database, scheduler, URLs, the processing
+pipeline, the frontend stack). Older chat sessions and memory frequently point at
+**deprecated infra** (Railway, Windows Task Scheduler) — `RUNBOOK.md` §0 lists
+what changed, and §14 has commands to confirm the doc is still accurate against
+live systems. Do not diagnose from memory; verify against `RUNBOOK.md`.
+
+**When you change hosting, the database, the scheduler, the processing pipeline,
+secrets, or the frontend stack, update `RUNBOOK.md` (and its "Last verified" date
+and changelog) in the same commit.**
+
+---
+
 ## Core Principle
 
 LLMs are probabilistic.  
@@ -186,9 +202,17 @@ When something fails:
 2. Fix the script or logic
 3. Add or update tests
 4. Update the relevant directive
-5. Confirm the system is stronger
+5. Update `RUNBOOK.md` if infra / architecture / the pipeline changed
+6. Confirm the system is stronger
 
 Failures are inputs, not mistakes.
+
+### 6. Verify current state before diagnosing
+
+`RUNBOOK.md` is authoritative for the live setup, but treat it as *verifiable*,
+not infallible. When a production symptom doesn't match it, run the checks in
+`RUNBOOK.md` §14 (health endpoint, `gh run list`, workflow entrypoint, model
+constant) and reconcile — update the doc if reality has moved.
 
 ---
 
