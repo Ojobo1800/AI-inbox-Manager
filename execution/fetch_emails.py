@@ -68,13 +68,6 @@ def _quote_folder(folder: str) -> str:
     return '"%s"' % folder.replace('"', '\\"')
 
 
-def _gm_label_atom(label: str) -> str:
-    """Render a label for an X-GM-LABELS list. System labels (\\Inbox) stay bare."""
-    if label.startswith("\\"):
-        return label
-    return '"%s"' % label.replace('"', '\\"')
-
-
 def _resolve_folder_uids(imap: "imaplib.IMAP4") -> Tuple[set, Dict[str, str]]:
     """
     Snapshot the currently-selected mailbox.
@@ -232,14 +225,22 @@ def move_emails(
     id_to_message_id: Optional[Dict[str, str]] = None,
 ) -> int:
     """
-    Organize emails by Gmail label, then remove them from the source folder.
+    Organize emails by moving them to their destination Gmail label.
 
-    For each message this applies the destination label with
-    ``STORE +X-GM-LABELS`` (Gmail auto-creates the label) and only then strips
-    the source-folder label (``\\Inbox`` for the inbox, otherwise the folder's
-    own label) with ``STORE -X-GM-LABELS``.  There is no COPY, no ``\\Deleted``
-    and no ``expunge()`` — the organize path cannot permanently delete mail, and
-    a partial failure just leaves an extra label to be retried next run.
+    Uses ``UID MOVE`` (RFC 6851) — a single atomic command per message. This
+    replaced a two-step ``STORE +X-GM-LABELS`` / ``STORE -X-GM-LABELS (\\Inbox)``
+    approach that looked correct and always returned ``OK``, but on this Gmail
+    account silently never removed the source label: the destination label was
+    applied, the message never left the source folder, and nothing in the
+    response indicated failure (root-caused 2026-09-15, see directive changelog).
+    ``UID MOVE`` was verified directly against this account to leave the source
+    folder, land correctly labeled in the destination, and not touch Trash.
+
+    This path never uses ``\\Deleted`` or ``expunge()`` — confirmed separately
+    that expunging a message from Inbox on this account strips every label and
+    sends it to Trash, even when another label is already applied. Permanent
+    deletion is intentionally confined to ``delete_emails()`` (the confirmed-spam
+    path), which is unaffected by this change.
 
     Handles are UIDs (see module docstring); each is checked against the live
     UID set and, if missing, re-resolved via its Message-ID before any mutation.
@@ -256,7 +257,6 @@ def move_emails(
         return 0
 
     id_to_message_id = id_to_message_id or {}
-    leave_label = "\\Inbox" if source_folder.upper() == "INBOX" else source_folder
 
     imap = None
     try:
@@ -286,19 +286,9 @@ def move_emails(
                     )
                     continue
 
-            # 1. Apply the destination label first (safe, reversible, auto-creates).
-            s1, r1 = imap.uid("STORE", uid, "+X-GM-LABELS", f"({_gm_label_atom(dest_folder)})")
-            if s1 != "OK":
-                logger.error(f"Move: failed to label UID {uid} as {dest_folder!r}: {r1}")
-                continue
-
-            # 2. Only now remove it from the source folder.
-            s2, r2 = imap.uid("STORE", uid, "-X-GM-LABELS", f"({_gm_label_atom(leave_label)})")
-            if s2 != "OK":
-                logger.error(
-                    f"Move: labeled UID {uid} {dest_folder!r} but could not leave "
-                    f"{source_folder!r}: {r2} — will retry next run"
-                )
+            s, r = imap.uid("MOVE", uid, _quote_folder(dest_folder))
+            if s != "OK":
+                logger.error(f"Move: failed to move UID {uid} to {dest_folder!r}: {r} — will retry next run")
                 continue
 
             moved_count += 1

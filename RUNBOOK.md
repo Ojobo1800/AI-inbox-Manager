@@ -5,8 +5,9 @@
 > file first**, then run the checks in [§14 "Verify this doc is still current"](#14-verify-this-doc-is-still-current)
 > before trusting any older notes, chat history, or memory.
 >
-> **Last verified: 2026-09-08** — against live infra, the `master` branch, and a
-> manual `workflow_dispatch` run (GH Actions run 34238068620).
+> **Last verified: 2026-09-15** — against live infra, the `master` branch, and a
+> manual `workflow_dispatch` run (GH Actions run 34238068620, 2026-09-08) plus
+> direct IMAP testing against the live mailbox (2026-09-15, see §16).
 
 ---
 
@@ -101,10 +102,14 @@ Entry point: `python execution/process_inbox_auto.py`
    - **Everything else** → organize: `CATEGORY_TO_FOLDER` map; if confidence <
      `ROUTING_CONFIDENCE_THRESHOLD` (0.70) or category unmapped → `Needs Review`;
      else the mapped folder.
-8. **Move** (`fetch_emails.move_emails`): for each message, `STORE +X-GM-LABELS
-   "<folder>"` then `STORE -X-GM-LABELS \Inbox`, addressed by **UID**, with
+8. **Move** (`fetch_emails.move_emails`): for each message, a single
+   `UID MOVE <uid> <folder>` (RFC 6851), addressed by **UID**, with
    **Message-ID re-resolution** if a UID has shifted. No COPY / `\Deleted` /
    `expunge()` in this path — it cannot delete mail.
+   ⚠️ **Do not revert this to `STORE +X-GM-LABELS` / `STORE -X-GM-LABELS
+   (\Inbox)`** — that was the approach from 2026-09-08 to 2026-09-15 and its
+   label-removal half is a *silent no-op* on this account: it returns `OK` but
+   never removes the message from Inbox (see [§16](#16-changelog-infra--architecture-only)).
 9. **Google Sheets** audit log (filtered subset of categories).
 10. **SharePoint** audit log (if configured; usually a no-op).
 11. **`ProcessRun`** row written to Neon; `summary.json` saved under
@@ -244,11 +249,15 @@ no trailing slash).
 - **Cost guardrails** — pre-run estimate abort + post-run actual-cost skip of
   Gmail mutations. Env: `MAX_COST_PER_RUN_USD` (default 5.0).
 - **Batch ceiling** — `MAX_EMAILS_PER_RUN` (default 100).
-- **Label-only organize path** — cannot permanently delete mail; the only hard
-  delete is the confirmed-spam purge, and it is UID-scoped (`UID EXPUNGE`), never
-  a blind `expunge()`.
+- **`MOVE`-only organize path** — cannot permanently delete mail (no
+  `\Deleted`/`expunge()`); the only hard delete is the confirmed-spam purge,
+  and it is UID-scoped (`UID EXPUNGE`), never a blind `expunge()`.
 - **UID + Message-ID addressing** — moves/deletes can't hit the wrong message
   when sequence numbers shift (see changelog 2026-09-08).
+- **Never trust an IMAP `OK` alone** — `STORE ±X-GM-LABELS` on `\Inbox`
+  returned `OK` for two weeks while doing nothing (2026-09-15 incident). If you
+  change the move/delete mechanism again, verify actual mailbox state changed,
+  not just the response code.
 - **Failure alerts** — `send_failure_alert()` → `ALERT_EMAIL_TO` on fatal errors
   / cost aborts.
 
@@ -308,7 +317,7 @@ rm tmp/process.lock             # if the PID is dead / lock > 3h old
 | Symptom | First checks |
 |---|---|
 | **Dashboard shows no / stale data** | `curl .../health` → is `database` `connected`? Is Render awake (cold start ≈ 20 s)? `gh run list` — are cron runs green? Check a run log for `Dashboard ProcessRun record created`. |
-| **Emails not being sorted** | `gh run view <id> --log` → look for `Successfully moved N of N`, `Move: … skipping`, `BAD Could not parse command`. Check `Total Processed` vs inbox size. Confirm `EMAIL_PASSWORD` / Gmail OAuth still valid (`AUTHENTICATE failed` / `invalid_grant`). |
+| **Emails not being sorted** | `gh run view <id> --log` → look for `Successfully moved N of N`, `Move: … skipping`, `BAD Could not parse command`. ⚠️ A clean `Successfully moved 100 of 100` log line is **not proof** — check the actual Inbox count too (via IMAP or `inbox_count` in `/api/stats/summary`); the 2026-09-15 incident had this exact log line every run for two weeks while nothing left Inbox. Confirm `EMAIL_PASSWORD` / Gmail OAuth still valid (`AUTHENTICATE failed` / `invalid_grant`). |
 | **Cron not running at all** | GH Actions → is "Process Inbox" **disabled**? (re-enable; keepalive should prevent this). Check `keepalive` ran in the last week. |
 | **Cost guardrail aborting** | Log shows `COST GUARDRAIL`. Real cost is ~17× lower than the estimate — usually safe to raise `MAX_COST_PER_RUN_USD` (GitHub secret / `.env`) or reduce inbox backlog. Fixing [§15](#15-known-issues--deferred-work) removes the false alarm. |
 | **OpenAI errors** | status.openai.com for outage. `401` → rotate key ([§8](#8-secrets--credentials)). `429` → lower `MAX_EMAILS_PER_RUN`. Affected emails stay UNSEEN for next run. |
@@ -378,11 +387,36 @@ config that *is* live: `render.yaml` + `services/dashboard/api/Dockerfile.prod`.
 - **The mislabelled backlog from the Sept 2026 incident** keeps its junk labels
   in Gmail; the fix stopped new damage but didn't retro-clean. A one-off
   label-stripping script can be written if needed.
+- **Inbox backlog from the 2026-09-15 incident.** ~2,700+ unread messages
+  accumulated while the move step silently failed for two weeks. The fix
+  (§16) makes every *new* run's moves actually work, but draining the backlog
+  at `MAX_EMAILS_PER_RUN=100` per ~2–6 h run will take days. Consider a
+  temporary bump to `MAX_EMAILS_PER_RUN` (real cost is ~17× lower than the
+  guardrail estimate, see above) to drain it faster, then set it back.
+- **GH Actions scheduled runs fire every 3–7 h, not every 2 h.** The cron is
+  `0 */2 * * *`, but observed gaps between consecutive runs are consistently
+  longer — GitHub delays/throttles scheduled (as opposed to `workflow_dispatch`)
+  triggers under load, and there's no SLA on exact timing. Budget for this when
+  estimating how fast the Inbox drains or how fresh dashboard data is.
 
 ---
 
 ## 16. Changelog (infra / architecture only)
 
+- **2026-09-15** — Organize-path move mechanism switched from
+  `STORE +X-GM-LABELS` / `STORE -X-GM-LABELS (\Inbox)` to a single `UID MOVE`
+  (RFC 6851). The two-step label approach (introduced 2026-09-08 below) always
+  returned `OK` but its label-removal half was a **silent no-op** on this Gmail
+  account — messages got correctly labeled and never left Inbox. Reported
+  repeatedly by ops (2026-09-01, 09, 11, 13) and escalated 2026-09-15; root-
+  caused via direct IMAP testing against the live mailbox (confirmed the no-op
+  on two independent messages via a fresh connection, and separately confirmed
+  `\Deleted`+expunge from Inbox strips all labels and moves to Trash on this
+  account — tested and rejected as the fix). `UID MOVE` verified end-to-end
+  against real stuck mail before deploying. Inbox had backlogged to ~2,700+
+  unread by the time this was fixed (see [§15](#15-known-issues--deferred-work)).
+  Commit on `master`; tests in `tests/execution/test_fetch_emails.py`;
+  `directives/email-integration.md` v1.3.
 - **2026-09-08** — Move/delete pipeline switched from IMAP sequence numbers to
   **UIDs + Gmail label ops** (`+X-GM-LABELS` / `-X-GM-LABELS \Inbox`), with
   Message-ID re-resolution and UID-scoped spam expunge. Folder names quoted in

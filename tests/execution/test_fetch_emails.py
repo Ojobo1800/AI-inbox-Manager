@@ -1,19 +1,31 @@
 """
 Unit tests for execution/fetch_emails.py IMAP operations.
 
-Regression coverage for the 2026-09 incident: the classify -> move pipeline
-identified messages by IMAP *sequence number*, resolved in one connection and
-mutated minutes later in another.  Sequence numbers renumber on every expunge,
-so labels landed on the wrong messages, the right messages never left the inbox,
-and each 2-hourly run smeared another label onto some unrelated email.
+Regression coverage for two incidents:
 
-The fix:
-  * every handle is a UID (stable across sessions and expunges);
-  * move/delete verify the handle against the folder's live UID set and, if it
-    has shifted, recover it via the RFC 5322 Message-ID header;
-  * the organize path mutates Gmail labels only -- no COPY, no \\Deleted, no
-    blind expunge() -- so it can never permanently destroy mail;
-  * the one hard delete (confirmed-spam purge) is scoped with UID EXPUNGE.
+1. **2026-09-08** -- the classify -> move pipeline identified messages by IMAP
+   *sequence number*, resolved in one connection and mutated minutes later in
+   another.  Sequence numbers renumber on every expunge, so labels landed on
+   the wrong messages, the right messages never left the inbox, and each
+   2-hourly run smeared another label onto some unrelated email.
+   Fix: every handle is a UID (stable across sessions and expunges); move/
+   delete verify the handle against the folder's live UID set and, if it has
+   shifted, recover it via the RFC 5322 Message-ID header.
+
+2. **2026-09-15** -- the organize path applied the destination label correctly
+   (``STORE +X-GM-LABELS``) but then tried to leave the source folder with
+   ``STORE -X-GM-LABELS (\\Inbox)``. That call always returned ``OK`` on this
+   Gmail account but silently never removed the message from Inbox -- emails
+   piled up in the Inbox, correctly labeled, for weeks, and every run's log
+   claimed "Successfully moved N of N". A ``\\Deleted`` + expunge fallback was
+   tested and rejected: on this account it strips every label and sends the
+   message straight to Trash, even when another label is already applied.
+   Fix: ``UID MOVE`` (RFC 6851) -- a single atomic command, verified directly
+   against the account to correctly leave the source folder, land labeled in
+   the destination, and never touch Trash.
+
+The one intentional hard delete (confirmed-spam purge) is unaffected -- still
+``\\Deleted`` + UID EXPUNGE, scoped to only the targeted UIDs.
 
 All tests use an in-memory fake IMAP client -- nothing touches a real server.
 """
@@ -43,13 +55,14 @@ class FakeIMAP:
         self._uids = [str(u) for u in uids_present]
         self._uid_to_msgid = {str(k): v for k, v in (uid_to_msgid or {}).items()}
         self.calls = []
-        self.label_ops = []       # (uid, "+"/"-", label_atom)
+        self.label_ops = []       # (uid, "+"/"-", label_atom) -- STORE-based, delete path only
+        self.move_ops = []        # (uid, destination_folder) -- UID MOVE, organize path
         self.flag_ops = []        # (uid, flag_atom)
         self.uid_expunged = []    # arg passed to UID EXPUNGE
         self.plain_expunge_called = False
         self.selected = None
         self.untagged_responses = {}
-        self.label_store_fails_for = set()  # uids whose +X-GM-LABELS returns NO
+        self.move_fails_for = set()  # uids whose UID MOVE returns NO
 
     # -- connection lifecycle -------------------------------------------------
     def select(self, mailbox, readonly=False):
@@ -91,8 +104,6 @@ class FakeIMAP:
         if cmd == "STORE":
             uid, op, val = str(args[0]), args[1], args[2]
             if op == "+X-GM-LABELS":
-                if uid in self.label_store_fails_for:
-                    return ("NO", [b"over quota"])
                 self.label_ops.append((uid, "+", val))
                 return ("OK", [b"done"])
             if op == "-X-GM-LABELS":
@@ -102,6 +113,13 @@ class FakeIMAP:
                 self.flag_ops.append((uid, val))
                 return ("OK", [b"done"])
             return ("OK", [b"done"])
+
+        if cmd == "MOVE":
+            uid, dest = str(args[0]), args[1]
+            if uid in self.move_fails_for:
+                return ("NO", [b"over quota"])
+            self.move_ops.append((uid, dest))
+            return ("OK", [None])
 
         if cmd == "EXPUNGE":
             self.uid_expunged.append(args[0])
@@ -164,16 +182,16 @@ def test_search_excludes_gmail_labels():
 
 # ── move_emails ─────────────────────────────────────────────────────────────
 
-def test_move_labels_then_archives_never_deletes(patch_connect):
+def test_move_uses_uid_move_never_deletes(patch_connect):
     fake = patch_connect(FakeIMAP(["10", "11"], {"10": "<a@x>", "11": "<b@x>"}))
 
     moved = move_emails("s", 993, "e", "p", {"10": "Job Alerts", "11": "Rejection"})
 
     assert moved == 2
-    assert ("10", "+", '("Job Alerts")') in fake.label_ops
-    assert ("10", "-", "(\\Inbox)") in fake.label_ops
-    assert ("11", "+", '("Rejection")') in fake.label_ops
-    # organize path must not touch \Deleted or expunge anything
+    assert ("10", '"Job Alerts"') in fake.move_ops
+    assert ("11", '"Rejection"') in fake.move_ops
+    # organize path must not touch labels via STORE, \Deleted, or expunge
+    assert fake.label_ops == []
     assert fake.flag_ops == []
     assert fake.uid_expunged == []
     assert fake.plain_expunge_called is False
@@ -185,7 +203,7 @@ def test_move_skips_handle_not_in_folder(patch_connect):
     moved = move_emails("s", 993, "e", "p", {"99": "Rejection"})
 
     assert moved == 0
-    assert fake.label_ops == []
+    assert fake.move_ops == []
 
 
 def test_move_recovers_stale_uid_via_message_id(patch_connect):
@@ -199,31 +217,30 @@ def test_move_recovers_stale_uid_via_message_id(patch_connect):
     )
 
     assert moved == 1
-    assert ("10", "+", '("Rejection")') in fake.label_ops
-    assert ("10", "-", "(\\Inbox)") in fake.label_ops
+    assert ("10", '"Rejection"') in fake.move_ops
 
 
-def test_move_does_not_archive_when_labelling_fails(patch_connect):
+def test_move_reports_failure_and_retries_next_run(patch_connect):
     fake = patch_connect(FakeIMAP(["10"], {"10": "<a@x>"}))
-    fake.label_store_fails_for = {"10"}
+    fake.move_fails_for = {"10"}
 
     moved = move_emails("s", 993, "e", "p", {"10": "Rejection"})
 
     assert moved == 0
-    assert all(op != "-" for (_uid, op, _atom) in fake.label_ops)
 
 
-def test_move_out_of_named_folder_strips_that_folder_label(patch_connect):
+def test_move_selects_named_source_folder(patch_connect):
     fake = patch_connect(FakeIMAP(["10"], {"10": "<a@x>"}))
 
-    move_emails(
+    moved = move_emails(
         "s", 993, "e", "p",
         {"10": "Job Alerts"},
         source_folder="Spam Review",
     )
 
+    assert moved == 1
     assert ("select", '"Spam Review"', False) in fake.calls
-    assert ("10", "-", '("Spam Review")') in fake.label_ops
+    assert ("10", '"Job Alerts"') in fake.move_ops
 
 
 # ── delete_emails ──────────────────────────────────────────────────────────

@@ -88,12 +88,19 @@ This directive enables the email classification system to process real emails fr
   handle is still present, and — if a UID has shifted — recover it via the
   RFC 5322 `Message-ID`. Pass `id_to_message_id={uid: message_id}` so recovery
   is possible.
-- **Organize by label, not by COPY + DELETE.** `move_emails()` applies the
-  destination label with `STORE +X-GM-LABELS`, then removes the source-folder
-  label (`\Inbox`, or the folder's own label) with `STORE -X-GM-LABELS`. The
-  destination label is applied *first*; if that fails the message is left where
-  it is and retried next run. No `COPY`, no `\Deleted`, no `expunge()` in this
-  path — it cannot permanently destroy mail.
+- **Organize with `UID MOVE` (RFC 6851), never `STORE ±X-GM-LABELS` for
+  removal.** `move_emails()` sends a single `imap.uid("MOVE", uid, dest_folder)`
+  per message. **Do not** go back to the two-step `STORE +X-GM-LABELS` /
+  `STORE -X-GM-LABELS (\Inbox)` pattern — it was the production approach until
+  2026-09-15 and, on this Gmail account, the label-removal half is a *silent
+  no-op*: the server returns `OK`, the destination label is applied, and the
+  message never leaves the source folder. Verified directly against the
+  account (see Duplicate Processing history below); `UID MOVE` is not
+  advertised in `CAPABILITIES` but works correctly regardless. No `COPY`, no
+  `\Deleted`, no `expunge()` in this path — it cannot permanently destroy mail.
+  A **tested and rejected** fallback: `\Deleted` + expunge from the source
+  folder, on this account, strips every label and sends the message to Trash —
+  even when another label is already applied. Never use it for organizing.
 - **Hard deletes are UID-scoped.** `delete_emails()` (confirmed-spam purge only)
   flags `\Deleted` on the resolved UIDs and calls `UID EXPUNGE` (RFC 4315) so
   only those messages are expunged — never a blind `expunge()` on a mailbox a
@@ -140,20 +147,33 @@ This directive enables the email classification system to process real emails fr
   email collided with an old row and was silently dropped — the dashboard's
   email tables froze while Gmail sorting and Google Sheets kept working. Fixed
   by adding `emails.message_id` and keying on it.
-- **History (2026-09)**: The *move* step had the same root cause. It read
+- **History (2026-09-08)**: The *move* step had the same root cause. It read
   sequence numbers in one connection and, minutes later in another connection,
   ran `COPY` + `\Deleted` + blind `expunge()` against those now-stale numbers.
   Labels landed on unrelated messages, the classified messages never left the
   inbox, and every 2-hourly run re-fetched them and smeared on another label —
   the inbox backed up past 300 and same-day mail stopped being sorted. Fixed by
   moving the whole fetch→move pipeline to UIDs, re-resolving via `Message-ID`,
-  and switching the organize path to label-only mutations (see step 7).
+  and switching the organize path to label-only mutations.
+- **History (2026-09-15)**: The 2026-09-08 fix moved to UIDs but still tried to
+  leave the source folder via `STORE -X-GM-LABELS (\Inbox)`. That call returned
+  `OK` every time and the code trusted it — but on this Gmail account it never
+  actually removes the message from Inbox. The bug was invisible in logs
+  ("Successfully moved 100 of 100") and in every manual/local verification run,
+  because it *looked* successful — only a real scheduled run over days revealed
+  the Inbox growing instead of draining (reported repeatedly by ops:
+  2026-09-01, 09, 11, 13, escalated 09-15; confirmed via direct IMAP testing
+  that `STORE -X-GM-LABELS (\Inbox)` is a no-op and `\Deleted`+expunge from
+  Inbox strips labels and moves to Trash on this account). Fixed by switching
+  to `UID MOVE` (see step 7), which was verified end-to-end against real stuck
+  mail before deploying. **Lesson:** an IMAP command returning `OK` is not
+  proof of effect — verify mailbox state changed, not just the response code.
 
 ## Safety Constraints
 
-- **Never delete emails in the organize path** - it mutates Gmail labels only
-  (`+X-GM-LABELS` / `-X-GM-LABELS`). The only hard delete is the confirmed-spam
-  purge in `delete_emails()`, and it is UID-scoped (`UID EXPUNGE`).
+- **Never delete emails in the organize path** - it moves via `UID MOVE` only,
+  never `\Deleted`/`expunge()`. The only hard delete is the confirmed-spam purge
+  in `delete_emails()`, and it is UID-scoped (`UID EXPUNGE`).
 - **Never blind-`expunge()`** - this mailbox is also operated by a human;
   expunge only the specific UIDs you flagged.
 - **Never modify email content** - Preserve original for audit trail
@@ -259,3 +279,14 @@ Before going live:
   cause of the 2026-06-29 → 2026-08-31 dashboard-data freeze. See
   `execution/migrate_add_message_id.py` and
   `tests/execution/test_import_email_to_db.py`.
+- **v1.2** (2026-09-08): Move/delete pipeline switched from sequence numbers to
+  UIDs + Message-ID recovery; organize path switched to Gmail label mutations
+  only (no COPY/`\Deleted`/blind `expunge()`). Fixed a 300+ email inbox backlog.
+  See step 7.
+- **v1.3** (2026-09-15): The v1.2 organize path (`STORE +X-GM-LABELS` then
+  `STORE -X-GM-LABELS (\Inbox)`) turned out to silently no-op the removal half
+  on this Gmail account — confirmed correctly labeled, never left Inbox, for
+  ~2 weeks before being caught. Switched to `UID MOVE` (RFC 6851), verified
+  against the live account (label-removal no-op and `\Deleted`+expunge
+  label-stripping-to-Trash both directly reproduced and ruled out first). See
+  step 7 and `tests/execution/test_fetch_emails.py`.
